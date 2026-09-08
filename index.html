@@ -27,6 +27,11 @@
     <p class="empty" id="empty" hidden></p>
   </section>
 
+  <section id="panel-map" hidden>
+    <div class="map-head" id="map-head"></div>
+    <div id="map"></div>
+  </section>
+
   <section id="panel-pick" hidden>
     <div class="pick-wrap">
       <input class="search" id="pick-search" type="search" autocomplete="off"
@@ -45,8 +50,9 @@
 
 <nav class="tabbar">
   <button class="tab" id="tab-stop" type="button" aria-pressed="true">Постојка</button>
-  <button class="tab" id="tab-pick" type="button" aria-pressed="false">Најди постојка</button>
-  <button class="tab" id="tab-info" type="button" aria-pressed="false">Информации</button>
+  <button class="tab" id="tab-map" type="button" aria-pressed="false">Мапа</button>
+  <button class="tab" id="tab-pick" type="button" aria-pressed="false">Најди</button>
+  <button class="tab" id="tab-info" type="button" aria-pressed="false">Инфо</button>
 </nav>
 
 <div id="toast" role="status"></div>
@@ -59,8 +65,9 @@
 <script src="js/history.js"></script>
 <script src="js/eta.js"></script>
 <script src="js/debug.js"></script>
-<script src="js/untracked.js"></script>
+<script src="js/timetable.js"></script>
 <script src="js/ui-stop.js"></script>
+<script src="js/ui-map.js"></script>
 <script src="js/ui-pick.js"></script>
 <script src="js/ui-info.js"></script>
 <script src="js/app.js"></script>

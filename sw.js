@@ -6,7 +6,7 @@
  *
  * ASSETS must mirror the script list in index.html. Bump CACHE_VERSION whenever
  * any cached file changes, or an installed PWA keeps serving the old one. */
-const CACHE_VERSION = 'sb-v2';
+const CACHE_VERSION = 'sb-v3';
 const ASSETS = [
   './',
   'index.html',
@@ -19,14 +19,23 @@ const ASSETS = [
   'js/history.js',
   'js/eta.js',
   'js/debug.js',
-  'js/untracked.js',
+  'js/timetable.js',
   'js/ui-stop.js',
+  'js/ui-map.js',
   'js/ui-pick.js',
   'js/ui-info.js',
   'js/app.js',
   'icons/favicon.svg',
   'icons/icon-192.png',
-  'icons/icon-512.png'
+  'icons/icon-512.png',
+  // Leaflet is vendored rather than loaded from a CDN precisely so it can be
+  // precached here: the fetch handler below ignores cross-origin GETs, so a CDN
+  // copy could never be cached and the map would be dead offline.
+  'vendor/leaflet/leaflet.js',
+  'vendor/leaflet/leaflet.css',
+  'vendor/leaflet/images/layers.png',
+  'vendor/leaflet/images/layers-2x.png',
+  'vendor/leaflet/images/marker-icon.png'
 ];
 
 self.addEventListener('install', function (event) {

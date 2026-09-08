@@ -9,22 +9,34 @@
   const SB = (window.SB = window.SB || {});
   const el = SB.dom.el;
 
+  const FEED_STALE_MS = 90000;   // matches eta.js's per-vehicle staleness gate
+
   let stopId = null;
   let arrivals = [];
   let signature = '';
   const rows = new Map(); // key -> {li, timeText, timeSub, sub}
 
-  function key(a) { return a.vehicleId + '|' + a.routeId + '|' + (a.untracked ? 'u' : 'l'); }
+  /* Prefixed by kind so a trip that starts mid-session changes key, the list
+   * signature changes with it, and the row moves from the scheduled group to
+   * the live group instead of being repainted in place. */
+  function key(a) {
+    return a.scheduled ? 's|' + a.tripId : 'l|' + a.vehicleId;
+  }
 
   function stopsAwayText(a) {
-    if (a.untracked) return 'нема ГПС сигнал од возилото';
+    if (a.scheduled) return SB.timetable.detail(a);
     if (a.stopsAway === 0) return 'следна постојка';
     if (a.stopsAway === 1) return '1 постојка до тука';
     return a.stopsAway + ' постојки до тука';
   }
 
   function delayText(a) {
-    if (a.delaySeconds == null || Math.abs(a.delaySeconds) < 120) return '';
+    if (a.scheduled) return '';
+    // -9999 is upstream's "unknown" sentinel; taken literally it reads as
+    // 166 minutes early. It appears in the schedule feed, never in the live
+    // one, but the guard is cheap and the failure is a visible lie.
+    if (a.delaySeconds == null || a.delaySeconds === -9999) return '';
+    if (Math.abs(a.delaySeconds) < 120 || Math.abs(a.delaySeconds) > 7200) return '';
     const mins = Math.round(Math.abs(a.delaySeconds) / 60);
     return a.delaySeconds > 0 ? ' · доцни ' + mins + ' мин' : ' · порано ' + mins + ' мин';
   }
@@ -90,16 +102,36 @@
     return li;
   }
 
-  function paintRow(a, now) {
+  /* `feedAgeMs` is how long since the last SUCCESSFUL poll, which is not the
+   * same as how old any one bus's GPS fix is. When the feed itself is down,
+   * every row is counting down from an arrival instant nobody has confirmed
+   * since — so the whole list freezes and says so, rather than ticking politely
+   * to "сега" for a bus that may already have come and gone. */
+  function paintRow(a, now, feedAgeMs) {
     const r = rows.get(key(a));
     if (!r) return;
-    const lbl = a.untracked
-      ? { text: a.scheduledText || 'по возен ред', sub: 'без следење' }
-      : SB.eta.label(a, now);
+
+    const feedDown = feedAgeMs != null && feedAgeMs > FEED_STALE_MS;
+    let lbl;
+    if (a.scheduled) {
+      // A schedule row does not depend on the live feed, so a feed outage does
+      // not make it any less true than it already was.
+      lbl = SB.timetable.label(a, now);
+    } else if (feedDown) {
+      lbl = { text: 'нема податоци', sub: 'од пред ' + SB.dom.fmtAge(feedAgeMs / 1000) };
+    } else {
+      lbl = SB.eta.label(a, now);
+    }
+
     r.timeText.textContent = lbl.text;
     r.timeSub.textContent = lbl.sub;
     r.sub.textContent = stopsAwayText(a) + delayText(a);
-    r.li.className = 'arrival is-' + (a.untracked ? 'untracked' : a.state);
+    r.li.className = 'arrival is-' +
+      (a.scheduled ? 'predicted' : (feedDown ? 'stale' : a.state));
+  }
+
+  function feedAge() {
+    return SB.app && SB.app.feedAgeMs ? SB.app.feedAgeMs() : null;
   }
 
   function renderList(now) {
@@ -114,7 +146,8 @@
       SB.dom.clear(host);
       arrivals.forEach(function (a) { host.appendChild(buildRow(a)); });
     }
-    arrivals.forEach(function (a) { paintRow(a, now); });
+    const age = feedAge();
+    arrivals.forEach(function (a) { paintRow(a, now, age); });
 
     if (empty) {
       if (arrivals.length) {
@@ -147,8 +180,15 @@
     onData: function (vehicles, now) {
       if (stopId == null) { renderList(now); return; }
       const live = SB.eta.arrivalsForStop(stopId, vehicles, now);
-      const extra = SB.untracked ? SB.untracked.forStop(stopId, now) : [];
-      arrivals = live.concat(extra);
+      // Deduped against what eta.js actually rendered, not against every live
+      // bus - see the comment on upcomingForStop.
+      const scheduled = SB.timetable.isLoaded()
+        ? SB.timetable.upcomingForStop(stopId, live, vehicles, now)
+        : [];
+      arrivals = live.concat(scheduled);
+      // Only live rows feed the accuracy stats, so the figures in the
+      // Information tab keep measuring the live engine and are not diluted by
+      // deliberately wide schedule ranges.
       SB.debug.recordPredictions(stopId, live, now);
       renderList(now);
     },
@@ -156,7 +196,8 @@
     /** Called once per second. Only touches text. */
     tick: function (now) {
       if (!arrivals.length) return;
-      arrivals.forEach(function (a) { paintRow(a, now); });
+      const age = feedAge();
+      arrivals.forEach(function (a) { paintRow(a, now, age); });
     },
 
     refreshHead: renderHead,

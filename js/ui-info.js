@@ -50,33 +50,44 @@
       ['вкупно примероци', String(hist.samples)]
     ]));
 
-    host.appendChild(el('h2', { text: 'Возила без ГПС' }));
+    host.appendChild(el('h2', { text: 'Возен ред за денес' }));
     host.appendChild(el('p', {
-      text: 'Дел од автобусите се возат, но не праќаат позиција, па не се појавуваат во листата. Оваа проверка ги бара во возниот ред во живо. Симнува околу 12 МБ, затоа не се прави автоматски.'
+      text: 'Со возниот ред се прикажуваат и автобусите што допрва тргнуваат во следниот час, како и оние што се возат без ГПС сигнал. Се презема еднаш дневно, околу 12 МБ, затоа не се прави автоматски.'
     }));
-    const checkBtn = el('button', { class: 'btn', type: 'button' }, 'Провери');
-    checkBtn.addEventListener('click', function () {
-      if (SB.untracked.saveDataOn()) {
-        SB.dom.toast('Исклучете „штедење на интернет“ за оваа проверка.', true);
+
+    const loaded = SB.timetable.isLoaded();
+    const loadBtn = el('button', { class: 'btn', type: 'button' },
+      loaded ? 'Преземи повторно' : 'Преземи возен ред');
+    loadBtn.addEventListener('click', function () {
+      if (SB.timetable.saveDataOn()) {
+        SB.dom.toast('Штедењето на интернет е вклучено, па возниот ред не се презема.', true);
         return;
       }
-      checkBtn.disabled = true;
-      checkBtn.textContent = 'Се проверува';
-      SB.untracked.check(SB.app.lastVehicles())
-        .then(function (list) {
-          SB.dom.toast(list.length + ' возила без сигнал се во движење.');
+      loadBtn.disabled = true;
+      loadBtn.textContent = 'Се презема';
+      SB.timetable.refresh(Date.now())
+        .then(function (trips) {
+          SB.dom.toast(trips.length + ' тргнувања за денес.');
           SB.app.repaintStop();
           render();
         })
-        .catch(function (err) { SB.dom.toast(err.message || 'Проверката не успеа.', true); })
-        .then(function () { checkBtn.disabled = false; checkBtn.textContent = 'Провери'; });
+        .catch(function () { SB.dom.toast('Возниот ред не се презеде.', true); })
+        .then(function () {
+          loadBtn.disabled = false;
+          loadBtn.textContent = SB.timetable.isLoaded() ? 'Преземи повторно' : 'Преземи возен ред';
+        });
     });
-    host.appendChild(el('div', { class: 'stop-actions' }, [checkBtn]));
-    if (SB.untracked.lastCheckedAt()) {
+    host.appendChild(el('div', { class: 'stop-actions' }, [loadBtn]));
+
+    if (loaded) {
+      const noGps = SB.timetable.runningWithoutGps(SB.app.lastVehicles(), Date.now()).length;
       host.appendChild(dl([
-        ['најдени', String(SB.untracked.count())],
-        ['проверено пред', SB.dom.fmtAge((Date.now() - SB.untracked.lastCheckedAt()) / 1000)]
+        ['тргнувања денес', String(SB.timetable.tripCount())],
+        ['во движење без ГПС', String(noGps)],
+        ['преземено пред', SB.dom.fmtAge((Date.now() - SB.timetable.loadedAt()) / 1000)]
       ]));
+    } else {
+      host.appendChild(el('p', { text: 'Возниот ред за денес не е преземен.' }));
     }
 
     host.appendChild(el('h2', { text: 'Поставки' }));

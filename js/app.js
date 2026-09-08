@@ -73,6 +73,7 @@
       SB.history.observe(vehicles, now);
       SB.debug.resolve(vehicles, now);
       SB.uiStop.onData(vehicles, now);
+      SB.uiMap.onData(vehicles, now);
       paintStatus(now);
       scheduleNext();
     }).catch(function (err) {
@@ -124,12 +125,21 @@
 
   const TABS = {
     stop: { panel: '#panel-stop', btn: '#tab-stop', mount: function () { SB.uiStop.render(); } },
+    map: {
+      panel: '#panel-map', btn: '#tab-map',
+      mount: function () { SB.uiMap.mount(); },
+      unmount: function () { SB.uiMap.unmount(); }
+    },
     pick: { panel: '#panel-pick', btn: '#tab-pick', mount: function () { SB.uiPick.mount(); } },
     info: { panel: '#panel-info', btn: '#tab-info', mount: function () { SB.uiInfo.mount(); } }
   };
 
   function showTab(name) {
+    const previous = activeTab;
     activeTab = name;
+    if (previous && previous !== name && TABS[previous] && TABS[previous].unmount) {
+      TABS[previous].unmount();
+    }
     Object.keys(TABS).forEach(function (k) {
       const t = TABS[k];
       const panel = SB.dom.qs(t.panel);
@@ -177,6 +187,8 @@
 
     Promise.all([SB.history.load(), SB.debug.load()])
       .then(function () { return SB.net.ensure(); })
+      // Today's timetable, from cache only. Never a 12 MB download on boot.
+      .then(function () { return SB.timetable.ensure(Date.now(), { cachedOnly: true }); })
       .then(function () {
         // A screen exists from here on, before any live data arrives.
         const initial = chooseInitialStop();
@@ -202,6 +214,7 @@
 
     window.addEventListener('sb:network', function () {
       if (activeTab === 'stop') SB.uiStop.render();
+      if (activeTab === 'map') SB.uiMap.render();
       if (activeTab === 'pick') SB.uiPick.render();
     });
 
@@ -218,6 +231,8 @@
     pollNow: poll,
     lastPosition: function () { return lastPosition; },
     lastVehicles: function () { return vehicles; },
+    /** Time since the last SUCCESSFUL poll, or null before the first one. */
+    feedAgeMs: function () { return lastPollAt ? Date.now() - lastPollAt : null; },
     repaintStop: function () { SB.uiStop.onData(vehicles, Date.now()); },
     nearestStop: nearestStop
   };

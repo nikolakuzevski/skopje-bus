@@ -213,8 +213,87 @@ body {
 .arrival.is-stale { opacity: 0.62; }
 .arrival.is-stale .time-text { color: var(--warn); font-size: 15px; }
 
-.arrival.is-untracked .time-text { color: var(--muted); font-size: 15px; }
-.arrival.is-untracked .route-badge { border-style: dashed; }
+/* A scheduled row is a prediction, not a sighting. It is deliberately quieter
+   than a live row and its badge is dashed, so the two can never be confused at
+   a glance. The accent colour stays reserved for a real live signal. */
+.arrival.is-predicted { opacity: 0.78; }
+.arrival.is-predicted .time-text { color: var(--muted); font-size: 16px; }
+.arrival.is-predicted .time-sub { color: var(--warn); }
+.arrival.is-predicted .route-badge { border-style: dashed; }
+
+/* ---------- map ---------- */
+
+/* `!important` is load-bearing: app.js toggles `panel.hidden`, and the UA
+   stylesheet's [hidden]{display:none} loses to an author `display:flex`.
+   Without it the map panel renders on every tab. */
+#panel-map { display: flex; flex-direction: column; }
+#panel-map[hidden] { display: none !important; }
+
+#map {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: calc(100dvh - var(--tabbar-h) - 150px);
+  background: var(--surface);
+}
+
+.leaflet-container {
+  background: var(--surface);
+  font: inherit;
+}
+
+.map-head { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.map-line { font-size: 14px; font-variant-numeric: tabular-nums; }
+.map-note { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+.map-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+.bus-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  position: relative;
+}
+
+.bus-pin.is-here { border-color: var(--accent); color: var(--accent); }
+.bus-pin.is-stale { opacity: 0.62; border-color: var(--warn); }
+
+.bus-num { pointer-events: none; }
+
+/* Rotation lives here, never on the marker root: Leaflet overwrites the root's
+   transform on every setLatLng, pan and zoom, which would erase the heading. */
+.bus-arrow {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  margin-left: -5px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 8px solid var(--accent);
+  transform-origin: 50% 21px;
+}
+
+.bus-pin.is-stale .bus-arrow { border-bottom-color: var(--warn); }
+
+.bus-dot {
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  margin-left: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
 
 /* ---------- states ---------- */
 
@@ -296,7 +375,7 @@ body {
   bottom: 0;
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   background: var(--surface);
   border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -308,7 +387,7 @@ body {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   height: var(--tabbar-h);
   cursor: pointer;
 }

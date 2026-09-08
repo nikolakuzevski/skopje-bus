@@ -143,6 +143,9 @@
 
       out.push({
         vehicleId: v.vehicleId,
+        // Carried through so js/timetable.js can dedupe exactly rather than by
+        // guesswork: a trip already shown live must not reappear as a schedule row.
+        tripId: v.tripId,
         label: v.label,
         routeId: v.routeId,
         routeName: SB.net.routeName(v.routeId),

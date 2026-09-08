@@ -77,11 +77,12 @@ js/api.js        the ONLY file that knows Modeshift; normalises at the boundary
 js/cache.js      IndexedDB kv + the routes/stops snapshot and its lookup indexes
 js/store.js      the ONLY file that touches localStorage (preferences only)
 js/history.js    learned stop-to-stop travel times
-js/eta.js        the prediction engine
+js/eta.js        the prediction engine for buses with live GPS
+js/timetable.js  the daily timetable: hour-ahead rows and buses with no GPS
 js/debug.js      predicted-vs-actual accuracy measurement
-js/untracked.js  the expensive TripUpdates check for buses with no GPS
-js/ui-*.js       the three tabs
+js/ui-*.js       the four tabs (stop, map, pick, info)
 js/app.js        boot, poll loop, tabs, the one-second clock
+vendor/leaflet/  Leaflet 1.9.4 (MIT), vendored deliberately - see The map below
 ```
 
 ### Why the app feels fast
@@ -129,6 +130,13 @@ Three behaviours exist specifically to fix JSP's app and should not be
    an empty stop.
 3. **Predictions more than 5 stops out are shown as a range**, because they are
    one. False precision is the failure being replaced.
+4. **A dead feed freezes the whole list.** On a failed poll `app.js` only sets a
+   banner; `onData` never runs, so every row keeps its last arrival instant and
+   the one-second tick would happily count it down to `сега` for a bus nobody
+   has heard from. `ui-stop.js` reads `SB.app.feedAgeMs()` and, past
+   `FEED_STALE_MS`, replaces every live row's countdown with `нема податоци`.
+   Note this is distinct from a single vehicle's stale GPS: the feed being down
+   invalidates every row at once.
 
 A stop that appears twice on a loop pattern keeps its **first** position
 (`cache.js`), so a bus is never told it has already passed a stop it is still
@@ -147,6 +155,14 @@ records while the app is open, so the model builds slowly and is biased toward
 the hours the user actually travels. That is the right bias, but it means early
 predictions are distance-based.
 
+`confirmed` alone is **not** sufficient, and relying on it was a bug: it only
+means "same pattern as last poll", so any break in the poll loop (backgrounding,
+offline, backoff) produced a sample spanning the entire gap and permanently
+poisoned that segment's median. `continuousSince` tracks the start of the
+current unbroken run of observations, and an interval that began before a gap
+longer than `MAX_POLL_GAP_MS` is discarded. Having no sample beats having a
+wrong one, because a poisoned median never heals.
+
 ### Measuring whether this is actually better (`js/debug.js`)
 
 Every prediction is logged with the moment it was made; when the bus later
@@ -155,20 +171,94 @@ ahead it was looking. The Information tab shows mean absolute error and bias.
 **This is the only evidence that the app beats the one it replaces** — if a
 change to `eta.js` does not improve these numbers, it did not help.
 
-### Buses with no GPS (`js/untracked.js`)
+### The daily timetable (`js/timetable.js`)
 
-Measured 2026-09-07 20:49: of ~188 trips that should have been running, 32 had a
-vehicle assigned in TripUpdates but no entry in the vehicles feed. Those are the
-buses that turn up having never appeared in the app.
+Absorbs the old `untracked.js` — both that feature and the hour-ahead list need
+the same 12 MB feed, so it is fetched once per service day, reduced, and reused.
+It is an explicit tap in the Information tab, never automatic, and is skipped
+when `navigator.connection.saveData` is set.
 
-Closing that gap costs a 12 MB unfilterable download, so it is an explicit
-user action from the Information tab, cached 3 minutes, and skipped when
-`navigator.connection.saveData` is set. Trips are filtered to those plausibly
-running now, using stop count times 2 minutes as a trip-length estimate —
-without that filter, finished trips inflate the count (25 became an honest 17).
-If this ever proves too heavy on real mobile data, the fallback is a small
-server-side proxy doing the filtering remotely; that would break the
-"no backend" property, so treat it as a last resort.
+**Reduction**: 3032 today-trips reduce to a ~73 KB compact table of
+`{tripId, routeId, patternIndex, startMin}`. 3023 of them (99.7%) match a known
+route pattern exactly on routeId plus ordered stop list, so they reuse the
+learned segment times; the 9 that do not carry their own stop list inline.
+The 12 MB object is dropped immediately after reduction.
+
+**THE CRITICAL LIMIT, measured twice: TripUpdates is a live operational feed,
+not a published timetable.** At 18:26, 5 of 1472 today-trips had a future start
+time. At 21:23, 3 of 3013. It lists trips already dispatched, not the coming
+hour's schedule. There is also no timetable endpoint anywhere: 12 candidate
+paths all 404, and JSP's own web bundle references only five transit endpoints
+(`planner/routes`, `planner/stops`, `planner/plan`, `gtfsrt/alerts`,
+`planner/vehicles`). **A full forward timetable cannot be built from this API.
+Do not add one without a new, verified data source.** What the hour-ahead list
+actually does is extend the stop view past `eta.js`'s `MAX_STOPS_AWAY` cap and
+add trips with no GPS, which is a real gain but is not the same thing.
+
+**Row states**, and the exact reason each exists:
+
+- `tracked_far` — has live GPS but sits beyond eta.js's range cap. Anchored on
+  the vehicle's real `nextStopArrival`, labelled `приближно`.
+- `no_signal` — started, no live vehicle at all. Labelled `предвидување`.
+- `predicted` — not yet departed. Labelled `предвидување`.
+
+`rendered` and `live` are **different sets** and conflating them was a shipped
+bug: eta.js stops at `MAX_STOPS_AWAY`, so a tracked bus can be absent from the
+list, and treating "absent" as "untracked" made 7 of 8 rows falsely claim
+`нема сигнал од возилото`. Dedupe against what eta.js *rendered*; decide
+tracked-ness from the *live vehicle list*. `upcomingForStop` takes both.
+
+**Uncertainty is measured, not invented.** A schedule-only prediction was
+compared against the live feed's own estimate for 100 buses. Median absolute
+error 3.7 min, p90 17.5 min, and error grows steeply with distance from the
+trip origin:
+
+| stops from origin | median | p90 |
+|---|---|---|
+| 1-3 | 1.6 min | 5.5 min |
+| 7-10 | 3.4 min | 7.1 min |
+| 16-25 | 7.6 min | 16.3 min |
+| 26-40 | 12.9 min | 36.5 min |
+| 41+ | 21.9 min | 54.4 min |
+
+`ERROR_CURVE` encodes that, and past `NO_ESTIMATE_AFTER_MIN` (35 minutes into a
+trip, where p90 exceeds half an hour) **no minute figure is printed at all** —
+only the departure time, which is the one thing upstream actually states. A row
+whose central estimate is already in the past shows `до N мин`, never a clamped
+`1-N мин`, which would claim the bus is still at least a minute away.
+
+### The map (`js/ui-map.js`)
+
+A **subscriber, never a fetcher**: `app.js` hands it each poll's vehicles. It
+owns no timers and makes no API calls; giving it its own poll would double load
+on an undocumented API for no new information.
+
+Leaflet is **vendored** in `vendor/leaflet/`, not loaded from a CDN, because
+`sw.js` deliberately ignores cross-origin GETs — a CDN copy could never be
+precached and the map would be dead offline. It is injected lazily on first
+`mount()` so a user who never opens the tab pays nothing at boot.
+
+Three details that will be got wrong if changed carelessly:
+
+- **Rotation must live on an inner span.** Leaflet rewrites `transform` on the
+  marker's root element on every `setLatLng`, pan and zoom, so a heading applied
+  to the root is silently erased each poll. `.bus-pin` is the root Leaflet owns;
+  `.bus-arrow` is ours.
+- **`#panel-map[hidden]` needs `display:none !important`.** `app.js` toggles
+  `panel.hidden`, and the UA stylesheet's `[hidden]{display:none}` loses to an
+  author `display:flex`. Without it the map renders on every tab.
+- **A ResizeObserver on the container is required**, not a one-shot
+  `invalidateSize()`. Leaflet caches its pixel size at init and loads tiles only
+  for that rectangle; a map created while its panel is hidden, or a device
+  rotation afterwards, leaves it loading a single tile into an empty view. This
+  was observed, not theorised.
+
+Honesty rules specific to this view: markers tween 1.2s between two genuinely
+reported positions and then stop — dead-reckoning along `heading` and `speed`
+would be drawing a position nobody reported. A vehicle with null heading (or
+near-zero speed) gets a plain dot, because a north-pointing arrow on a bus of
+unknown heading is an invented fact. Buses with no GPS cannot be drawn at all,
+so the header states how many are missing.
 
 ## Verification
 

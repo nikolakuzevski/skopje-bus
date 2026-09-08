@@ -17,6 +17,12 @@
   const MIN_SEC = 5;            // shorter than this is a GPS artefact
   const MAX_SEC = 900;          // longer means the bus stopped behaving like one
   const FLUSH_MS = 30000;
+  /* The poll runs every 15s. A longer gap than this means the app was
+   * backgrounded, offline, or backing off, so we did not actually witness when
+   * the bus changed stops - only that it did, some time inside the gap. Timing
+   * anything across such a gap silently poisons the model with inflated
+   * samples, which is worse than having no sample at all. */
+  const MAX_POLL_GAP_MS = 40000;
 
   // 'routeId:patternIndex|fromPos|hour' -> [seconds, ...]
   let samples = new Map();
@@ -25,6 +31,8 @@
   let dirty = false;
   let flushTimer = null;
   let loaded = false;
+  let lastObserveAt = 0;
+  let continuousSince = 0;   // start of the current unbroken run of observations
 
   function bucketKey(patternKey, fromPos, hour) {
     return patternKey + '|' + fromPos + '|' + hour;
@@ -73,6 +81,13 @@
   function observe(vehicles, nowMs) {
     if (!SB.net.isLoaded()) return;
     const now = nowMs || Date.now();
+
+    // Any break in observation restarts the clock. Intervals that began before
+    // the break are no longer measurements, only guesses, and are discarded.
+    const gap = lastObserveAt ? now - lastObserveAt : Infinity;
+    if (gap > MAX_POLL_GAP_MS) continuousSince = now;
+    lastObserveAt = now;
+
     const live = new Set();
 
     vehicles.forEach(function (v) {
@@ -86,7 +101,8 @@
       const prev = seen.get(v.vehicleId);
       if (prev && prev.key === key && prev.nextStopId === v.nextStopId) return; // unchanged
 
-      if (prev && prev.key === key && prev.confirmed && pos === prev.pos + 1 && prev.pos >= 1) {
+      if (prev && prev.key === key && prev.confirmed && pos === prev.pos + 1 && prev.pos >= 1 &&
+          prev.becameAt >= continuousSince) {
         // The target moved from stops[prev.pos] to stops[pos], so the bus just
         // reached stops[prev.pos]. Time since that target was set is how long
         // it took to cover stops[prev.pos - 1] -> stops[prev.pos].

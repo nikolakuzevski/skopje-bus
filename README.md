@@ -20,9 +20,20 @@ bouncing across a 38-second range, the number on screen stayed inside 8 seconds.
 Buses more than five stops away show a range, not a fake exact minute.
 
 **It can find the buses that are missing.** Some buses run without sending a
-position and never appear in any app. The Information tab has a check that
-finds them. It downloads about 12 MB, so it is a button, not something that
-happens automatically.
+position and never appear in any app. Download today's timetable from the
+Information tab and they show up, marked "предвидување" because that is what
+they are. The same download extends the list to buses further up the line that
+are still an hour away. It is about 12 MB, so it is a button pressed once a
+day, not something that happens automatically.
+
+A limit worth knowing: JSP does not publish a forward timetable through this
+API. Its feed lists buses already dispatched, not the coming hour's departures,
+so the hour-ahead list shows what the feed genuinely knows and nothing more.
+Inventing the rest would defeat the point of the app.
+
+**A map.** Watch the buses move across Skopje, with line numbers and which way
+each one is pointing. Buses serving your stop are highlighted. Positions are
+roughly half a minute old and the map says so rather than pretending otherwise.
 
 **It learns your routes.** While open, it times how long buses actually take
 between stops and uses that instead of a generic estimate. This gets better the
@@ -49,5 +60,9 @@ arrival data obviously needs a connection.
 The same source JSP's own app and website use. It is not an officially published
 API, so it can change or stop working without warning. If that happens,
 everything that touches it lives in `js/api.js`.
+
+The map uses [Leaflet](https://leafletjs.com/) 1.9.4 (MIT), copied into
+`vendor/leaflet/` rather than loaded from a CDN so the app keeps working
+offline, with map tiles from OpenStreetMap.
 
 This is a personal project and is not affiliated with JSP Skopje.
