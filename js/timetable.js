@@ -25,6 +25,12 @@
   const SB = (window.SB = window.SB || {});
 
   const HORIZON_MIN = 60;          // "buses within the hour"
+  /* TripUpdates is a rolling record of DISPATCHED trips, not a published
+   * timetable (measured: 5 of 1472 today-trips had a future start time). A
+   * snapshot therefore cannot know about buses dispatched after it was taken,
+   * so it goes out of date within the hour rather than lasting the service day.
+   * Rows are only drawn from a snapshot younger than this. */
+  const SNAPSHOT_TTL_MS = 30 * 60 * 1000;
   const MIN_PER_STOP = 2;          // rough trip length, for "has it finished yet"
   const FALLBACK_SPEED_MPS = 4.7;
   const DWELL_SEC = 12;
@@ -154,6 +160,11 @@
   function fromCache(nowMs) {
     return SB.cache.get('timetable').then(function (saved) {
       if (!saved || saved.day !== stampOf(nowMs) || !Array.isArray(saved.trips)) return false;
+      /* An empty snapshot must never be cached as authoritative for the day.
+       * Taken just after midnight the feed legitimately returns nothing, and
+       * accepting that would leave the app showing no scheduled buses until
+       * tomorrow - the "buses go missing" failure this project exists to fix. */
+      if (!saved.trips.length) return false;
       trips = saved.trips;
       loadedAt = saved.savedAt || 0;
       dayStamp = saved.day;
@@ -290,23 +301,14 @@
       // time, so trip length is estimated from stop count.
       if (t.startMin + stops.length * MIN_PER_STOP < nowMin) return;
 
-      const vehicle = liveByTrip.get(t.tripId) || null;
-      let anchorMs, fromPos, state;
+      /* Anything with a live position is now handled entirely by eta.js, which
+       * the caller runs at a widened range. This module only supplies what the
+       * live feed genuinely cannot know. */
+      if (liveByTrip.has(t.tripId)) return;
 
-      if (vehicle && vehicle.nextStopId != null && vehicle.nextStopArrival) {
-        // Tracked, just beyond the live list's range. Anchor on where the bus
-        // actually is; that beats a schedule estimate by a wide margin.
-        const i = positionIn(t, vehicle.nextStopId);
-        if (i < 0) return;
-        if (entry.position < i) return;               // already went past
-        anchorMs = vehicle.nextStopArrival;
-        fromPos = i;
-        state = 'tracked_far';
-      } else {
-        anchorMs = midnight + t.startMin * 60000;
-        fromPos = 0;
-        state = nowMin >= t.startMin ? 'no_signal' : 'predicted';
-      }
+      const anchorMs = midnight + t.startMin * 60000;
+      const fromPos = 0;
+      const state = nowMin >= t.startMin ? 'no_signal' : 'predicted';
 
       const trav = traversalSeconds(t, fromPos, entry.position, hour);
       if (!trav) return;                               // missing coordinates
@@ -329,7 +331,7 @@
         headsign: destinationName(t),
         departureMin: t.startMin,
         stopsFromOrigin: entry.position,
-        stopsAway: state === 'tracked_far' ? entry.position - fromPos : null,
+        stopsAway: null,
         predictedAt: predictedAt,
         // Suppressed deliberately when the measured error makes a number
         // meaningless. The row still appears; it just does not claim a minute.
@@ -338,7 +340,7 @@
         elapsedMin: elapsedMin,
         learnedRatio: learnedRatio,
         started: nowMin >= t.startMin,
-        tracked: state === 'tracked_far',
+        tracked: false,
         state: state
       });
     });
@@ -428,7 +430,12 @@
     upcomingForStop: upcomingForStop,
     runningWithoutGps: runningWithoutGps,
     saveDataOn: saveDataOn,
-    isLoaded: function () { return !!byStop; },
+    isLoaded: function () { return !!byStop && trips.length > 0; },
+    /** Young enough for its rows to be drawn. See SNAPSHOT_TTL_MS. */
+    isFresh: function () {
+      return !!byStop && trips.length > 0 && (Date.now() - loadedAt) < SNAPSHOT_TTL_MS;
+    },
+    ttlMs: SNAPSHOT_TTL_MS,
     day: function () { return dayStamp; },
     loadedAt: function () { return loadedAt; },
     tripCount: function () { return trips.length; },

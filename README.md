@@ -19,17 +19,20 @@ bouncing across a 38-second range, the number on screen stayed inside 8 seconds.
 90 seconds, the countdown stops and the row says "нема сигнал" with the age.
 Buses more than five stops away show a range, not a fake exact minute.
 
+**It shows buses that are still far away.** Not just the next few stops: buses
+up to forty stops up the line appear too, with a wide range rather than a fake
+exact minute. This needs no download and is always on.
+
 **It can find the buses that are missing.** Some buses run without sending a
-position and never appear in any app. Download today's timetable from the
+position and never appear in any app. Download the timetable from the
 Information tab and they show up, marked "предвидување" because that is what
-they are. The same download extends the list to buses further up the line that
-are still an hour away. It is about 12 MB, so it is a button pressed once a
-day, not something that happens automatically.
+they are, along with buses that have not left their terminus yet.
 
 A limit worth knowing: JSP does not publish a forward timetable through this
 API. Its feed lists buses already dispatched, not the coming hour's departures,
-so the hour-ahead list shows what the feed genuinely knows and nothing more.
-Inventing the rest would defeat the point of the app.
+so what you get is a snapshot that stays useful for about half an hour rather
+than a schedule for the day. The app says how old it is instead of pretending
+otherwise. Inventing the rest would defeat the point.
 
 **A map.** Watch the buses move across Skopje, with line numbers and which way
 each one is pointing. Buses serving your stop are highlighted. Positions are

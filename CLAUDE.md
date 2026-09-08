@@ -174,9 +174,9 @@ change to `eta.js` does not improve these numbers, it did not help.
 ### The daily timetable (`js/timetable.js`)
 
 Absorbs the old `untracked.js` — both that feature and the hour-ahead list need
-the same 12 MB feed, so it is fetched once per service day, reduced, and reused.
-It is an explicit tap in the Information tab, never automatic, and is skipped
-when `navigator.connection.saveData` is set.
+the same 12 MB feed, so it is fetched once, reduced, and reused. It is an
+explicit tap in the Information tab, never automatic, and is skipped when
+`navigator.connection.saveData` is set.
 
 **Reduction**: 3032 today-trips reduce to a ~73 KB compact table of
 `{tripId, routeId, patternIndex, startMin}`. 3023 of them (99.7%) match a known
@@ -195,15 +195,34 @@ Do not add one without a new, verified data source.** What the hour-ahead list
 actually does is extend the stop view past `eta.js`'s `MAX_STOPS_AWAY` cap and
 add trips with no GPS, which is a real gain but is not the same thing.
 
-**Row states**, and the exact reason each exists:
+**Because it is a rolling feed, a once-per-day snapshot is wrong**, and building
+one was a mistake worth not repeating. A snapshot cannot contain trips
+dispatched after it was taken, so `SNAPSHOT_TTL_MS` is 30 minutes and
+`isFresh()`, not `isLoaded()`, gates whether rows are drawn. Two related traps:
 
-- `tracked_far` — has live GPS but sits beyond eta.js's range cap. Anchored on
-  the vehicle's real `nextStopArrival`, labelled `приближно`.
+- **An empty snapshot must never be cached as authoritative.** Just after
+  midnight the feed legitimately returns zero trips (verified at 01:26: 0
+  entities, 0 vehicles, first departure 01:30). Caching that under today's date
+  made `ensure()` accept it for the rest of the day, so the whole feature would
+  have silently shown nothing until tomorrow. `fromCache` rejects empty.
+- **This module now supplies only what the live feed cannot know**: buses
+  running with no GPS, and trips that have not departed. Anything with a live
+  position belongs to eta.js.
+
+**Far buses come from the live feed, not from here.** `eta.js`'s
+`arrivalsForStop` takes an optional `maxStopsAway`; `ui-stop.js` calls it once
+at `FAR_MAX_STOPS` (40) and splits the result at `NEAR_MAX_STOPS` (12) into
+confident rows and wide-range `is-far` rows. That is the bulk of the hour-ahead
+view and it costs nothing extra — the same 36 KB poll either way — so it works
+with no download at all. Only the two cases above need the 12 MB.
+
+**Row states** from this module:
+
 - `no_signal` — started, no live vehicle at all. Labelled `предвидување`.
 - `predicted` — not yet departed. Labelled `предвидување`.
 
 `rendered` and `live` are **different sets** and conflating them was a shipped
-bug: eta.js stops at `MAX_STOPS_AWAY`, so a tracked bus can be absent from the
+bug: eta.js stops at its range cap, so a tracked bus can be absent from the
 list, and treating "absent" as "untracked" made 7 of 8 rows falsely claim
 `нема сигнал од возилото`. Dedupe against what eta.js *rendered*; decide
 tracked-ness from the *live vehicle list*. `upcomingForStop` takes both.

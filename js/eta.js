@@ -72,9 +72,13 @@
    * Arrivals of `vehicles` at `stopId`, soonest first.
    * Pure apart from the smoothing memory, so it is safe to call every poll.
    */
-  function arrivalsForStop(stopId, vehicles, nowMs) {
+  function arrivalsForStop(stopId, vehicles, nowMs, opts) {
     const now = nowMs || Date.now();
     if (!SB.net.isLoaded()) return [];
+    // Callers can widen the range to pick up buses that are tracked but still
+    // far up the line. Those need no schedule data at all - just this feed and
+    // the route's stop order - so they cost nothing extra.
+    const maxStopsAway = (opts && opts.maxStopsAway) || MAX_STOPS_AWAY;
 
     const hour = new Date(now).getHours();
     const out = [];
@@ -92,7 +96,7 @@
       if (j < i) return;                       // already went past
 
       const stopsAway = j - i;
-      if (stopsAway > MAX_STOPS_AWAY) return;
+      if (stopsAway > maxStopsAway) return;
 
       // Anchor: the upstream estimate for the bus's own next stop. If it is
       // missing, fall back to the bus's straight-line distance to that stop.

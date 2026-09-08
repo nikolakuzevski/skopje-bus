@@ -10,6 +10,8 @@
   const el = SB.dom.el;
 
   const FEED_STALE_MS = 90000;   // matches eta.js's per-vehicle staleness gate
+  const NEAR_MAX_STOPS = 12;     // eta.js's own confident range
+  const FAR_MAX_STOPS = 40;      // tracked, but far enough to need a wide range
 
   let stopId = null;
   let arrivals = [];
@@ -20,7 +22,8 @@
    * signature changes with it, and the row moves from the scheduled group to
    * the live group instead of being repainted in place. */
   function key(a) {
-    return a.scheduled ? 's|' + a.tripId : 'l|' + a.vehicleId;
+    if (a.scheduled) return 's|' + a.tripId;
+    return (a.far ? 'f|' : 'l|') + a.vehicleId;
   }
 
   function stopsAwayText(a) {
@@ -127,7 +130,7 @@
     r.timeSub.textContent = lbl.sub;
     r.sub.textContent = stopsAwayText(a) + delayText(a);
     r.li.className = 'arrival is-' +
-      (a.scheduled ? 'predicted' : (feedDown ? 'stale' : a.state));
+      (a.scheduled ? 'predicted' : (feedDown ? 'stale' : (a.far ? 'far' : a.state)));
   }
 
   function feedAge() {
@@ -179,16 +182,30 @@
     /** Called by app.js after every successful poll. */
     onData: function (vehicles, now) {
       if (stopId == null) { renderList(now); return; }
-      const live = SB.eta.arrivalsForStop(stopId, vehicles, now);
-      // Deduped against what eta.js actually rendered, not against every live
-      // bus - see the comment on upcomingForStop.
-      const scheduled = SB.timetable.isLoaded()
-        ? SB.timetable.upcomingForStop(stopId, live, vehicles, now)
+
+      /* Two passes over the same live feed. The near pass is the confident
+       * list; the far pass picks up buses that are genuinely tracked but still
+       * many stops up the line, which the old cap hid entirely. This needs no
+       * timetable download - it is the same 36 KB poll either way - so the
+       * bulk of the hour-ahead view is free and always on. */
+      const all = SB.eta.arrivalsForStop(stopId, vehicles, now, { maxStopsAway: FAR_MAX_STOPS });
+      const live = [];
+      const far = [];
+      all.forEach(function (a) {
+        if (a.stopsAway <= NEAR_MAX_STOPS) live.push(a);
+        else far.push(Object.assign({}, a, { far: true }));
+      });
+
+      // The timetable adds only what the live feed cannot know: buses running
+      // with no GPS, and trips that have not departed yet.
+      const scheduled = SB.timetable.isFresh()
+        ? SB.timetable.upcomingForStop(stopId, all, vehicles, now)
         : [];
-      arrivals = live.concat(scheduled);
-      // Only live rows feed the accuracy stats, so the figures in the
-      // Information tab keep measuring the live engine and are not diluted by
-      // deliberately wide schedule ranges.
+
+      arrivals = live.concat(far, scheduled);
+      // Only the confident near rows feed the accuracy stats, so the figures in
+      // the Information tab keep measuring the live engine and are not diluted
+      // by deliberately wide far or schedule ranges.
       SB.debug.recordPredictions(stopId, live, now);
       renderList(now);
     },

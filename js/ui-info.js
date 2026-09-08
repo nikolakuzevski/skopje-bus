@@ -50,12 +50,16 @@
       ['вкупно примероци', String(hist.samples)]
     ]));
 
-    host.appendChild(el('h2', { text: 'Возен ред за денес' }));
+    host.appendChild(el('h2', { text: 'Возен ред' }));
     host.appendChild(el('p', {
-      text: 'Со возниот ред се прикажуваат и автобусите што допрва тргнуваат во следниот час, како и оние што се возат без ГПС сигнал. Се презема еднаш дневно, околу 12 МБ, затоа не се прави автоматски.'
+      text: 'Автобусите со ГПС сигнал секогаш се прикажуваат, и оние што се уште далеку по линијата. Ова преземање додава само тоа што сигналот не го знае: возила во движење без ГПС и тргнувања што допрва следат.'
+    }));
+    host.appendChild(el('p', {
+      text: 'Превозникот не објавува возен ред нанапред, туку само возила што веќе тргнале, па преземеното важи околу половина час. Големо е околу 12 МБ, затоа не се прави автоматски.'
     }));
 
     const loaded = SB.timetable.isLoaded();
+    const fresh = SB.timetable.isFresh();
     const loadBtn = el('button', { class: 'btn', type: 'button' },
       loaded ? 'Преземи повторно' : 'Преземи возен ред');
     loadBtn.addEventListener('click', function () {
@@ -67,7 +71,9 @@
       loadBtn.textContent = 'Се презема';
       SB.timetable.refresh(Date.now())
         .then(function (trips) {
-          SB.dom.toast(trips.length + ' тргнувања за денес.');
+          SB.dom.toast(trips.length
+            ? trips.length + ' тргнувања во возниот ред.'
+            : 'Превозникот моментално не објавува ниту едно возило.');
           SB.app.repaintStop();
           render();
         })
@@ -82,12 +88,13 @@
     if (loaded) {
       const noGps = SB.timetable.runningWithoutGps(SB.app.lastVehicles(), Date.now()).length;
       host.appendChild(dl([
-        ['тргнувања денес', String(SB.timetable.tripCount())],
+        ['тргнувања во возниот ред', String(SB.timetable.tripCount())],
         ['во движење без ГПС', String(noGps)],
-        ['преземено пред', SB.dom.fmtAge((Date.now() - SB.timetable.loadedAt()) / 1000)]
+        ['преземено пред', SB.dom.fmtAge((Date.now() - SB.timetable.loadedAt()) / 1000)],
+        ['се уште важи', fresh ? 'да' : 'не, преземете повторно']
       ]));
     } else {
-      host.appendChild(el('p', { text: 'Возниот ред за денес не е преземен.' }));
+      host.appendChild(el('p', { text: 'Возниот ред не е преземен.' }));
     }
 
     host.appendChild(el('h2', { text: 'Поставки' }));

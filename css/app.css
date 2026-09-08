@@ -216,6 +216,11 @@ body {
 /* A scheduled row is a prediction, not a sighting. It is deliberately quieter
    than a live row and its badge is dashed, so the two can never be confused at
    a glance. The accent colour stays reserved for a real live signal. */
+/* Tracked by GPS, but far enough up the line that the estimate is a range.
+   Quieter than a near row, but not dashed: this bus is genuinely being seen. */
+.arrival.is-far { opacity: 0.86; }
+.arrival.is-far .time-text { font-size: 18px; }
+
 .arrival.is-predicted { opacity: 0.78; }
 .arrival.is-predicted .time-text { color: var(--muted); font-size: 16px; }
 .arrival.is-predicted .time-sub { color: var(--warn); }
