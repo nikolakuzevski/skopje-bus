@@ -13,10 +13,49 @@
   const NEAR_MAX_STOPS = 12;     // eta.js's own confident range
   const FAR_MAX_STOPS = 40;      // tracked, but far enough to need a wide range
 
+  /* A manual refresh on one row still refetches the whole feed - the API has
+   * no way to ask for a single vehicle - so every row visibly updates from a
+   * single tap, not just the one pressed. A short shared cooldown stops a
+   * curious double-tap (or several rows tapped in a row) from turning into a
+   * burst of requests against an undocumented API; REFRESH_TIMEOUT_MS is a
+   * backstop so a button can never spin forever if a poll's settle event is
+   * somehow missed (a hidden tab, a poll already in flight and swallowed). */
+  const REFRESH_COOLDOWN_MS = 5000;
+  const REFRESH_TIMEOUT_MS = 10000;
+
   let stopId = null;
   let arrivals = [];
   let signature = '';
-  const rows = new Map(); // key -> {li, timeText, timeSub, sub}
+  const rows = new Map(); // key -> {li, timeText, timeSub, sub, refreshBtn}
+  let lastManualRefreshAt = 0;
+  const refreshing = new Set(); // row keys currently showing the spin state
+
+  function refreshIcon() {
+    return el('span', {
+      class: 'refresh-icon',
+      html: '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">' +
+        '<path fill="currentColor" d="M8 2.5a5.5 5.5 0 1 0 5.163 3.6.75.75 0 0 1 1.406-.53A7 7 0 1 1 8 1v-.9a.35.35 0 0 1 .57-.27l2.4 1.9a.35.35 0 0 1 0 .55l-2.4 1.9A.35.35 0 0 1 8 3.9V2.5Z"/>' +
+        '</svg>'
+    });
+  }
+
+  function stopSpinning(key) {
+    refreshing.delete(key);
+    const r = rows.get(key);
+    if (r && r.refreshBtn) {
+      r.refreshBtn.classList.remove('is-spinning');
+      r.refreshBtn.disabled = false;
+    }
+  }
+
+  /* Fires once per settled poll, whoever triggered it - the timer, a
+   * visibility resume, or one of these buttons. Clearing every spinning row
+   * together (rather than tracking which tap caused which response) is
+   * correct: the feed is a single shared fetch, so any settle means every
+   * row's data is now as fresh as this tap could make it. */
+  window.addEventListener('sb:poll-settled', function () {
+    Array.from(refreshing).forEach(stopSpinning);
+  });
 
   /* Prefixed by kind so a trip that starts mid-session changes key, the list
    * signature changes with it, and the row moves from the scheduled group to
@@ -93,19 +132,46 @@
     ]));
   }
 
+  function requestRefresh(rowKey) {
+    const now = Date.now();
+    // Refreshing refetches the whole feed - there is no per-vehicle endpoint -
+    // so this cooldown is shared across every row's button, not per-button.
+    if (now - lastManualRefreshAt < REFRESH_COOLDOWN_MS) {
+      SB.dom.toast('Веќе е освежено пред кратко.');
+      return;
+    }
+    lastManualRefreshAt = now;
+    refreshing.add(rowKey);
+    const r = rows.get(rowKey);
+    if (r && r.refreshBtn) {
+      r.refreshBtn.classList.add('is-spinning');
+      r.refreshBtn.disabled = true;
+    }
+    setTimeout(function () {
+      if (refreshing.has(rowKey)) stopSpinning(rowKey);
+    }, REFRESH_TIMEOUT_MS);
+    if (SB.app) SB.app.pollNow();
+  }
+
   function buildRow(a) {
+    const rowKey = key(a);
     const timeText = el('span', { class: 'time-text' });
     const timeSub = el('span', { class: 'time-sub' });
     const sub = el('span', { class: 'arrival-sub' });
-    const li = el('li', { class: 'arrival', dataset: { key: key(a) } }, [
+    const refreshBtn = el('button', {
+      class: 'row-refresh', type: 'button', 'aria-label': 'Освежи сега',
+      onclick: function (e) { e.stopPropagation(); requestRefresh(rowKey); }
+    }, [refreshIcon()]);
+    const li = el('li', { class: 'arrival', dataset: { key: rowKey } }, [
       el('span', { class: 'route-badge', text: a.routeName }),
       el('span', { class: 'arrival-main' }, [
         el('span', { class: 'headsign', text: a.headsign || SB.net.routeName(a.routeId) }),
         sub
       ]),
-      el('span', { class: 'arrival-time' }, [timeText, timeSub])
+      el('span', { class: 'arrival-time' }, [timeText, timeSub]),
+      refreshBtn
     ]);
-    rows.set(key(a), { li: li, timeText: timeText, timeSub: timeSub, sub: sub });
+    rows.set(rowKey, { li: li, timeText: timeText, timeSub: timeSub, sub: sub, refreshBtn: refreshBtn });
     return li;
   }
 
@@ -202,8 +268,8 @@
       /* Two passes over the same live feed. The near pass is the confident
        * list; the far pass picks up buses that are genuinely tracked but still
        * many stops up the line, which the old cap hid entirely. This needs no
-       * timetable download - it is the same 36 KB poll either way - so the
-       * bulk of the hour-ahead view is free and always on. */
+       * timetable download - it is the same 36 KB poll either way - so it is
+       * free and always on. */
       const all = SB.eta.arrivalsForStop(stopId, vehicles, now, { maxStopsAway: FAR_MAX_STOPS });
       const live = [];
       const far = [];
@@ -212,8 +278,10 @@
         else far.push(Object.assign({}, a, { far: true }));
       });
 
-      // The timetable adds only what the live feed cannot know: buses running
-      // with no GPS, and trips that have not departed yet.
+      // The timetable adds only trips not yet dispatched - what the live feed
+      // genuinely cannot know. Already-departed, no-GPS trips are a different
+      // question with a different answer; see js/timetable.js's header for why
+      // they are not mixed in here.
       const scheduled = SB.timetable.isFresh()
         ? SB.timetable.upcomingForStop(stopId, all, vehicles, now)
         : [];

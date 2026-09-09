@@ -23,16 +23,19 @@ Buses more than five stops away show a range, not a fake exact minute.
 up to forty stops up the line appear too, with a wide range rather than a fake
 exact minute. This needs no download and is always on.
 
-**It can find the buses that are missing.** Some buses run without sending a
-position and never appear in any app. Download the timetable from the
-Information tab and they show up, marked "предвидување" because that is what
-they are, along with buses that have not left their terminus yet.
+**You can refresh a bus the moment you want to.** Every row has its own
+refresh button. There is no way to ask the source for just one bus's position,
+so it re-fetches everything, but that row is the one you tapped, and it lands
+immediately instead of waiting out the rest of the poll interval.
 
-A limit worth knowing: JSP does not publish a forward timetable through this
-API. Its feed lists buses already dispatched, not the coming hour's departures,
-so what you get is a snapshot that stays useful for about half an hour rather
-than a schedule for the day. The app says how old it is instead of pretending
-otherwise. Inventing the rest would defeat the point.
+**Buses that haven't left yet, shown honestly.** Download the timetable from
+the Information tab and any bus due to depart within 40 minutes shows up,
+marked "предвидување". A limit worth knowing, and worth saying plainly: JSP
+does not publish a forward timetable anywhere reachable — checked directly,
+not assumed. Its feed only ever lists buses already dispatched, so most of the
+time this list will be short or empty, and that is the real data talking, not
+a broken feature. It never mixes in already-departed buses just to look fuller
+— those get counted separately, honestly, on the Information tab instead.
 
 **A map.** Watch the buses move across Skopje, with line numbers and which way
 each one is pointing. Buses serving your stop are highlighted. Positions are

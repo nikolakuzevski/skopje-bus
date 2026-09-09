@@ -20,11 +20,26 @@
  * So an arrival estimate here can only ever be: departure time, plus the time to
  * travel from the first stop to yours. That is a genuine prediction and is
  * labelled as one. How wrong it is was measured, not assumed — see ERROR_CURVE.
+ *
+ * CONFIRMED SEPARATELY: JSP does not publish an advance timetable
+ * anywhere reachable. No GTFS static feed exists at any plausible URL on
+ * jsp.com.mk or skopjebus.mk (all checked, all 404), and neither transit.land
+ * nor mobilitydatabase.org lists a Skopje/JSP operator. A decade-old academic
+ * GTFS conversion of JSP's data exists in research papers but was never
+ * publicly hosted and is not maintained. So `upcomingForStop()` below can only
+ * ever surface the trips that already happen to appear in this rolling feed
+ * with a future startTime - which measured consistently under 1% of a day's
+ * trips at any given moment. It is the best available answer, not a full one,
+ * and the list being short or empty most of the time is that limit showing,
+ * not a bug.
  */
 (function () {
   const SB = (window.SB = window.SB || {});
 
-  const HORIZON_MIN = 60;          // "buses within the hour"
+  /* 40, not 60: past the first cut the user asked for buses within an hour,
+   * then asked specifically for 40 minutes instead once they saw what an
+   * hour's worth of this feed actually looks like. */
+  const HORIZON_MIN = 40;
   /* TripUpdates is a rolling record of DISPATCHED trips, not a published
    * timetable (measured: 5 of 1472 today-trips had a future start time). A
    * snapshot therefore cannot know about buses dispatched after it was taken,
@@ -269,7 +284,17 @@
   }
 
   /**
-   * Trips reaching `stopId` within the horizon.
+   * Trips not yet dispatched that will reach `stopId` within the horizon.
+   *
+   * Deliberately NOT every trip the timetable knows about heading this way:
+   * this function used to also include trips that had already started but had
+   * no live vehicle ("no_signal"). That was a real complaint, not a taste
+   * preference - opening the app kept showing a list dominated by buses that
+   * had already left, when what was asked for was buses still to come. Those
+   * already-departed, no-GPS trips are real and still worth knowing about, but
+   * they belong to a different question ("is my bus running dark") than this
+   * one ("what's still coming") - js/ui-info.js's `runningWithoutGps()` answers
+   * that one separately, on the Information tab, not mixed into this list.
    *
    * Deduped against the arrivals js/eta.js ALREADY RENDERED, not against every
    * bus with a live position. Those are different sets: eta.js stops at
@@ -306,12 +331,13 @@
       const t = entry.trip;
       if (renderedTripIds.has(t.tripId)) return;      // already on screen from eta.js
 
+      // Not yet dispatched, full stop - see the doc comment above for why an
+      // already-departed trip with no GPS does not belong in this list even
+      // though the timetable also knows about it.
+      if (nowMin >= t.startMin) return;
+
       const stops = stopsOf(t);
       if (!stops) return;
-
-      // Drop trips that have almost certainly finished. Upstream gives no end
-      // time, so trip length is estimated from stop count.
-      if (t.startMin + stops.length * MIN_PER_STOP < nowMin) return;
 
       /* Anything with a live position is now handled entirely by eta.js, which
        * the caller runs at a widened range. This module only supplies what the
@@ -320,7 +346,6 @@
 
       const anchorMs = wallClockInstant(now, t.startMin);
       const fromPos = 0;
-      const state = nowMin >= t.startMin ? 'no_signal' : 'predicted';
 
       const trav = traversalSeconds(t, fromPos, entry.position, hour);
       if (!trav) return;                               // missing coordinates
@@ -349,9 +374,7 @@
         estimateUsable: elapsedMin <= NO_ESTIMATE_AFTER_MIN,
         marginMin: marginMinutes(elapsedMin, learnedRatio),
         elapsedMin: elapsedMin,
-        learnedRatio: learnedRatio,
-        started: nowMin >= t.startMin,
-        state: state
+        learnedRatio: learnedRatio
       });
     });
 
@@ -402,11 +425,10 @@
    */
   function label(row, nowMs) {
     const now = nowMs || Date.now();
-    // "тргнал" (past tense) would assert a departure nobody observed - every
-    // row here is a trip with no live vehicle, and arrival.time is 0 in every
-    // upstream entry (see file header), so there is no confirmation that it
-    // actually left. "по ред" (scheduled) states only what is actually known.
-    const depart = 'по ред ' + clockOf(row.departureMin);
+    // Every row here has not departed yet (upcomingForStop filters strictly
+    // on nowMin >= t.startMin), so "тргнува" (departs, not yet past tense) is
+    // accurate rather than just cautious.
+    const depart = 'тргнува ' + clockOf(row.departureMin);
 
     // Every row this module emits has no live vehicle - anything tracked is
     // shown by eta.js instead, which uses its own "приближно"/exact wording.
@@ -431,8 +453,7 @@
 
   /** The secondary line under a scheduled row. */
   function detail(row) {
-    const bits = ['по ред ' + clockOf(row.departureMin)];
-    if (row.state === 'no_signal') bits.push('нема возило пријавено на оваа тура');
+    const bits = ['тргнува ' + clockOf(row.departureMin)];
     if (row.stopsFromOrigin > 0) bits.push(row.stopsFromOrigin + ' постојки од почетна');
     return bits.join(' · ');
   }

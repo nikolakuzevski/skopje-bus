@@ -147,11 +147,39 @@ body {
 
 .arrival {
   display: grid;
-  grid-template-columns: 54px 1fr auto;
+  grid-template-columns: 54px 1fr auto auto;
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
+}
+
+.row-refresh {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.row-refresh:active { background: var(--line); }
+.row-refresh:disabled { cursor: default; opacity: 0.7; }
+
+.row-refresh .refresh-icon { display: flex; }
+
+.row-refresh.is-spinning { color: var(--accent); border-color: var(--accent); }
+.row-refresh.is-spinning .refresh-icon svg { animation: sb-spin 0.9s linear infinite; }
+
+@keyframes sb-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .route-badge {
@@ -451,4 +479,5 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   #toast { transition: none; }
+  .row-refresh.is-spinning .refresh-icon svg { animation: none; }
 }

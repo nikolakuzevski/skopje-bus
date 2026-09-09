@@ -11,6 +11,9 @@
         if (val === null || val === undefined || val === false) continue;
         if (key === 'class') node.className = val;
         else if (key === 'text') node.textContent = val;
+        // For small trusted markup only (e.g. an inline icon's own <svg>),
+        // never for any string built from upstream API data.
+        else if (key === 'html') node.innerHTML = val;
         else if (key === 'dataset') Object.assign(node.dataset, val);
         else if (key === 'style') Object.assign(node.style, val);
         else if (key.startsWith('on') && typeof val === 'function') {

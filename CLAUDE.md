@@ -105,6 +105,19 @@ exponentially to a two-minute ceiling on repeated failure. **Note when testing:
 a hidden browser tab will not poll — that is correct behaviour, not a bug**, and
 it is the most likely reason a headless check sees no data.
 
+**Manual per-row refresh.** Each arrival row carries a small refresh button
+(`js/ui-stop.js`'s `requestRefresh`/`.row-refresh`). There is no per-vehicle
+endpoint — `/vehicles` is the whole feed or nothing — so under the hood every
+tap is the same full `SB.app.pollNow()` the automatic loop uses; the button
+just gives the user an immediate one instead of waiting up to 15s. A shared
+`REFRESH_COOLDOWN_MS` (5s) across every row's button stops a curious multi-tap
+turning into a burst of requests against an undocumented API, and a
+`REFRESH_TIMEOUT_MS` backstop (10s) clears a stuck spin if `sb:poll-settled`
+(dispatched from both branches of `app.js`'s `poll()`) is ever missed. Clearing
+happens for *every* currently-spinning row on any settle, correctly, because
+the underlying fetch is one shared feed — there is no way for one row's tap to
+resolve without every row's data also being current.
+
 ### The ETA engine (`js/eta.js`)
 
 For bus `V` and stop `S` on `V`'s pattern: `i` = position of `V`'s next stop,
@@ -184,16 +197,35 @@ route pattern exactly on routeId plus ordered stop list, so they reuse the
 learned segment times; the 9 that do not carry their own stop list inline.
 The 12 MB object is dropped immediately after reduction.
 
-**THE CRITICAL LIMIT, measured twice: TripUpdates is a live operational feed,
-not a published timetable.** At 18:26, 5 of 1472 today-trips had a future start
-time. At 21:23, 3 of 3013. It lists trips already dispatched, not the coming
-hour's schedule. There is also no timetable endpoint anywhere: 12 candidate
-paths all 404, and JSP's own web bundle references only five transit endpoints
-(`planner/routes`, `planner/stops`, `planner/plan`, `gtfsrt/alerts`,
-`planner/vehicles`). **A full forward timetable cannot be built from this API.
-Do not add one without a new, verified data source.** What the hour-ahead list
-actually does is extend the stop view past `eta.js`'s `MAX_STOPS_AWAY` cap and
-add trips with no GPS, which is a real gain but is not the same thing.
+**THE CRITICAL LIMIT, measured repeatedly, from multiple angles, on different
+days: TripUpdates is a live operational feed, not a published timetable.**
+Trip-level: at 18:26, 5 of 1472 today-trips had a future start time; at 21:23,
+3 of 3013. It lists trips already dispatched, not a coming schedule. Endpoint
+level: 12 candidate REST paths on Modeshift all 404, and JSP's own web bundle
+references only five transit endpoints (`planner/routes`, `planner/stops`,
+`planner/plan`, `gtfsrt/alerts`, `planner/vehicles`) — no timetable endpoint
+exists there at all. Catalog level: neither transit.land nor
+mobilitydatabase.org lists a Skopje or JSP operator, and no GTFS static zip
+exists at any plausible URL on jsp.com.mk or skopjebus.mk (checked directly,
+all 404). A decade-old academic GTFS conversion of JSP's data exists in
+research papers but was never publicly hosted and is not maintained. **A full
+forward timetable cannot be built from this API or found anywhere else
+reachable. Do not add one without a genuinely new, verified data source** — and
+verify it the same way: check it actually answers "what departs in the next
+40 minutes that hasn't left yet", not just that a page mentions GTFS.
+
+Given that, what `js/timetable.js` can honestly do splits into two different
+questions, and — see the September revision below — they must not be mixed
+into one list:
+- **"What's still to come?"** (`upcomingForStop`) — only the rare trips this
+  rolling feed happens to catch before they depart. Usually few or none.
+- **"What's running dark?"** (`runningWithoutGps`) — trips already dispatched
+  with no live vehicle. Real, useful, but a different question with a
+  different answer, shown only in the Information tab's count.
+
+What the near/far live split in `ui-stop.js` does (below) is extend the stop
+view past `eta.js`'s old `MAX_STOPS_AWAY` cap — a real gain, and unrelated to
+either of the above, since it needs no schedule data at all.
 
 **Because it is a rolling feed, a once-per-day snapshot is wrong**, and building
 one was a mistake worth not repeating. A snapshot cannot contain trips
@@ -216,16 +248,35 @@ confident rows and wide-range `is-far` rows. That is the bulk of the hour-ahead
 view and it costs nothing extra — the same 36 KB poll either way — so it works
 with no download at all. Only the two cases above need the 12 MB.
 
-**Row states** from this module:
+**Third revision: `upcomingForStop` now returns only not-yet-departed trips.**
+It originally also included already-departed, no-GPS trips (labelled
+`no_signal`), reasoning that a dispatched-but-dark bus is still real
+information. In practice that meant the main stop screen's "coming within the
+hour" list was dominated by buses that had **already left** — exactly the
+complaint that came back: "you're giving me the ones that already departed;
+give me the ones still coming." That complaint is the direct, predictable
+consequence of the data limit above (rarely-populated advance data, commonly-
+populated dispatched-trip data), not a bug in how the two were being
+combined — so the fix is not a smarter merge, it is **not merging them**:
+`upcomingForStop` now filters strictly on `nowMin < t.startMin` and drops
+`no_signal` (and the `state`/`started`/`tracked` fields that existed to
+distinguish it — every row here is now unconditionally "not yet departed", so
+`тргнува` is used, not the neutral `по ред`). The already-departed-dark
+question still has a real, honest answer — `runningWithoutGps`, unchanged,
+still feeding the Information tab's "тргнати без ГПС сигнал" count — it is
+just no longer answered on the same screen as "what's still coming", because
+those are different questions and conflating them is what caused the
+complaint. **`HORIZON_MIN` is 40, not 60**, per the same follow-up: the user
+asked for an hour first, then asked for 40 minutes once they had seen what an
+hour of this data actually looks like.
 
-- `no_signal` — started, no live vehicle at all. Labelled `предвидување`.
-- `predicted` — not yet departed. Labelled `предвидување`.
-
-`rendered` and `live` are **different sets** and conflating them was a shipped
-bug: eta.js stops at its range cap, so a tracked bus can be absent from the
-list, and treating "absent" as "untracked" made 7 of 8 rows falsely claim
-`нема сигнал од возилото`. Dedupe against what eta.js *rendered*; decide
-tracked-ness from the *live vehicle list*. `upcomingForStop` takes both.
+`rendered` and `live` are still **different sets**, independently of the above,
+and conflating THEM was an earlier, separate bug: eta.js stops at its range
+cap, so a tracked bus can be absent from the list, and treating "absent" as
+"untracked" made 7 of 8 rows falsely claim `нема сигнал од возилото`. Dedupe
+against what eta.js *rendered*; decide tracked-ness from the *live vehicle
+list*. `upcomingForStop` takes both, and still needs to given the live-position
+short-circuit that remains in the function.
 
 **Uncertainty is measured, not invented.** A schedule-only prediction was
 compared against the live feed's own estimate for 100 buses. Median absolute

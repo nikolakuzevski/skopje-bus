@@ -96,6 +96,10 @@
       SB.uiMap.onData(vehicles, now);
       paintStatus(now);
       scheduleNext();
+      // Lets a manual per-row refresh know its data has landed, whichever
+      // poll actually delivered it - the timer, a visibility resume, or the
+      // tap itself. See js/ui-stop.js's row refresh button.
+      window.dispatchEvent(new CustomEvent('sb:poll-settled'));
     }).catch(function (err) {
       polling = false;
       failures += 1;
@@ -108,6 +112,7 @@
       }
       paintStatus(Date.now());
       scheduleNext();
+      window.dispatchEvent(new CustomEvent('sb:poll-settled'));
     });
   }
 
