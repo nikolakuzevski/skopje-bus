@@ -40,6 +40,16 @@
 
   /** Nudge the held arrival instant toward `rawAt`, snapping on big moves. */
   function smooth(key, rawAt, now) {
+    // A non-finite rawAt (e.g. from a malformed lat/lon upstream) must never be
+    // stored: Math.abs(NaN - x) > SNAP_MS is false, so a NaN would fall into the
+    // EMA branch below and poison this key's held value forever - every later
+    // comparison against a stored NaN is also false, so it could never recover
+    // even once good data arrives again. Falling back to the previous good
+    // value (or dropping the key) keeps the failure local and temporary.
+    if (!Number.isFinite(rawAt)) {
+      const existing = held.get(key);
+      return existing ? existing.shownAt : null;
+    }
     const prev = held.get(key);
     let shownAt;
     if (!prev) {
@@ -103,7 +113,14 @@
       let base = v.nextStopArrival;
       if (!base) {
         const nextStop = SB.net.stopById.get(v.nextStopId);
-        const metres = nextStop ? SB.dom.haversine(v.lat, v.lon, nextStop.lat, nextStop.lon) : 300;
+        // Only compute a real distance when every coordinate involved is an
+        // actual number - api.js normalises a missing lat/lon to null, and
+        // null coerces to 0 in arithmetic, which would silently measure from
+        // the equator instead of honestly falling back to the flat default.
+        const haveCoords = nextStop && typeof v.lat === 'number' && typeof v.lon === 'number';
+        const metres = haveCoords
+          ? SB.dom.haversine(v.lat, v.lon, nextStop.lat, nextStop.lon)
+          : 300;
         base = (v.lastUpdated || now) + (metres / FALLBACK_SPEED_MPS) * 1000;
       }
 
@@ -122,28 +139,37 @@
       }
 
       const rawAt = base + extraSec * 1000;
+      // A missing fix timestamp is unknown age, not zero age - treat it the
+      // same as stale rather than as fresh, or a bus that has never reported
+      // lastUpdated would get a live countdown built on nothing.
       const ageSec = v.lastUpdated ? (now - v.lastUpdated) / 1000 : null;
-      const stale = ageSec != null && ageSec * 1000 > STALE_MS;
+      const stale = ageSec == null || ageSec * 1000 > STALE_MS;
 
       // A stale vehicle keeps whatever instant it last had, but is never
       // smoothed further and is flagged so the UI can stop the countdown.
       const key = heldKey(v.vehicleId, stopId);
       const predictedAt = stale
-        ? (held.get(key) ? held.get(key).shownAt : rawAt)
+        ? (held.get(key) ? held.get(key).shownAt : (Number.isFinite(rawAt) ? rawAt : null))
         : smooth(key, rawAt, now);
-
-      let state;
-      if (stale) state = 'stale';
-      else if (stopsAway === 0 && v.stopStatus === 'STOPPED_AT') state = 'at_stop';
-      else if (stopsAway === 0 && v.stopStatus === 'INCOMING_AT') state = 'arriving';
-      else if (predictedAt - now <= 30000) state = 'due';
-      else state = 'enroute';
+      if (predictedAt == null) return; // no honest number to show for this bus yet
 
       const ratio = stopsAway === 0 ? 1 : learned / stopsAway;
       let confidence;
       if (stopsAway <= 1) confidence = 'high';
       else if (stopsAway <= 5 || ratio >= 0.6) confidence = 'medium';
       else confidence = 'low';
+
+      let state;
+      if (stale) state = 'stale';
+      else if (stopsAway === 0 && v.stopStatus === 'STOPPED_AT') state = 'at_stop';
+      else if (stopsAway === 0 && v.stopStatus === 'INCOMING_AT') state = 'arriving';
+      // A low-confidence row is a wide guess; the smoothed instant can drift
+      // behind the wall clock as the EMA only closes part of each poll's gap,
+      // which can push predictedAt within 30s of now while the underlying raw
+      // estimate is still minutes out. Gating 'due' on confidence stops a wide
+      // guess claiming the bus is imminent.
+      else if (confidence !== 'low' && predictedAt - now <= 30000) state = 'due';
+      else state = 'enroute';
 
       out.push({
         vehicleId: v.vehicleId,
@@ -183,20 +209,37 @@
     const sec = (arrival.predictedAt - now) / 1000;
 
     if (arrival.state === 'stale') {
-      return { text: 'нема сигнал', sub: 'последно пред ' + SB.dom.fmtAge(arrival.ageSec) };
+      return {
+        text: 'нема сигнал',
+        sub: arrival.ageSec == null ? 'непозната старост' : 'последно пред ' + SB.dom.fmtAge(arrival.ageSec)
+      };
     }
-    if (arrival.state === 'at_stop') return { text: 'на постојка', sub: '' };
-    if (arrival.state === 'arriving') return { text: 'пристигнува', sub: '' };
-    if (sec <= 45) return { text: 'сега', sub: '' };
+    // These report a live status straight from upstream, but that status can
+    // itself be up to STALE_MS old - "на постојка" with no age reads as "right
+    // now" when it might not be.
+    if (arrival.state === 'at_stop' || arrival.state === 'arriving') {
+      return {
+        text: arrival.state === 'at_stop' ? 'на постојка' : 'пристигнува',
+        sub: arrival.ageSec != null ? 'од пред ' + SB.dom.fmtAge(arrival.ageSec) : ''
+      };
+    }
+    // Only a confident row may claim "сега" - see the 'due' gate above for why.
+    if (arrival.confidence !== 'low' && sec <= 45) return { text: 'сега', sub: '' };
 
     const mins = Math.round(sec / 60);
     if (arrival.confidence === 'low') {
-      const spread = Math.max(1, Math.round(mins * 0.25));
+      const spread = Math.max(1, Math.round(Math.abs(mins) * 0.25));
+      const lo = mins - spread;
+      const hi = mins + spread;
+      // Never clamp the low end up: that would claim the bus is at least a
+      // minute away when the estimate allows for it arriving already. Mirrors
+      // the same rule in js/timetable.js's schedule-row labels.
       return {
-        text: Math.max(1, mins - spread) + '-' + (mins + spread) + ' мин',
+        text: lo <= 0 ? 'до ' + Math.max(1, hi) + ' мин' : lo + '-' + hi + ' мин',
         sub: 'приближно'
       };
     }
+    if (mins <= 0) return { text: 'сега', sub: '' };
     return { text: mins + ' мин', sub: SB.dom.fmtClock(arrival.predictedAt) };
   }
 

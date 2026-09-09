@@ -75,10 +75,13 @@
             ? trips.length + ' тргнувања во возниот ред.'
             : 'Превозникот моментално не објавува ниту едно возило.');
           SB.app.repaintStop();
+          // render() rebuilds this whole panel, including loadBtn itself, so
+          // any write to loadBtn after this point would land on a node no
+          // longer in the document. Reset it before rebuilding, not after.
           render();
         })
-        .catch(function () { SB.dom.toast('Возниот ред не се презеде.', true); })
-        .then(function () {
+        .catch(function () {
+          SB.dom.toast('Возниот ред не се презеде.', true);
           loadBtn.disabled = false;
           loadBtn.textContent = SB.timetable.isLoaded() ? 'Преземи повторно' : 'Преземи возен ред';
         });
@@ -89,7 +92,7 @@
       const noGps = SB.timetable.runningWithoutGps(SB.app.lastVehicles(), Date.now()).length;
       host.appendChild(dl([
         ['тргнувања во возниот ред', String(SB.timetable.tripCount())],
-        ['во движење без ГПС', String(noGps)],
+        ['тргнати без ГПС сигнал', String(noGps)],
         ['преземено пред', SB.dom.fmtAge((Date.now() - SB.timetable.loadedAt()) / 1000)],
         ['се уште важи', fresh ? 'да' : 'не, преземете повторно']
       ]));
@@ -127,6 +130,12 @@
         onclick: function () {
           SB.net.refresh().then(function () {
             SB.dom.toast('Списокот на линии е освежен.');
+            // A manual refresh is also the recovery path if the poll loop
+            // never got off the ground (e.g. it failed at boot before a retry
+            // was in place). Restarting it here costs nothing when it is
+            // already running - poll() no-ops while one is in flight.
+            window.dispatchEvent(new CustomEvent('sb:network'));
+            SB.app.pollNow();
             render();
           }).catch(function () { SB.dom.toast('Освежувањето не успеа.', true); });
         }

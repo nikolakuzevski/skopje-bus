@@ -6,7 +6,7 @@
  *
  * ASSETS must mirror the script list in index.html. Bump CACHE_VERSION whenever
  * any cached file changes, or an installed PWA keeps serving the old one. */
-const CACHE_VERSION = 'sb-v3';
+const CACHE_VERSION = 'sb-v4';
 const ASSETS = [
   './',
   'index.html',
@@ -41,7 +41,15 @@ const ASSETS = [
 self.addEventListener('install', function (event) {
   event.waitUntil(
     caches.open(CACHE_VERSION)
-      .then(function (cache) { return cache.addAll(ASSETS); })
+      .then(function (cache) {
+        // Plain URL strings let cache.addAll's fetches be answered from the
+        // browser's own HTTP cache. A CACHE_VERSION bump made within a static
+        // asset's max-age window could then precache the OLD bytes under the
+        // NEW cache name - {cache:'reload'} forces each one past that.
+        return cache.addAll(ASSETS.map(function (u) {
+          return new Request(u, { cache: 'reload' });
+        }));
+      })
       .then(function () { return self.skipWaiting(); })
   );
 });
@@ -72,7 +80,12 @@ self.addEventListener('fetch', function (event) {
         const network = fetch(req).then(function (res) {
           if (res && res.status === 200) cache.put(req, res.clone());
           return res;
-        }).catch(function () { return cached; });
+        }).catch(function () { return cached || cache.match('./'); });
+        // Keep the revalidation alive past this handler returning: without
+        // waitUntil, the worker can be torn down before cache.put lands, so
+        // "new files next load" silently sometimes needs one load more than
+        // that. Also covers the cache.put promise, not just the response.
+        event.waitUntil(network);
         return cached || network;
       });
     })

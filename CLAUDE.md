@@ -276,8 +276,78 @@ Honesty rules specific to this view: markers tween 1.2s between two genuinely
 reported positions and then stop — dead-reckoning along `heading` and `speed`
 would be drawing a position nobody reported. A vehicle with null heading (or
 near-zero speed) gets a plain dot, because a north-pointing arrow on a bus of
-unknown heading is an invented fact. Buses with no GPS cannot be drawn at all,
-so the header states how many are missing.
+unknown heading is an invented fact. Buses with no GPS cannot be drawn at all;
+the header states how many are missing only when a fresh timetable download
+makes that count knowable (`SB.timetable.runningWithoutGps`) — the `/vehicles`
+feed alone can never answer it, since it by construction contains only buses
+that ARE reporting a position, so comparing its length to the drawn count
+always reads close to zero and is not the same fact.
+
+## Second audit pass (2026-09-09)
+
+A follow-up audit, adversarially verified per finding, found and fixed several
+more bugs. Recorded here because each one encodes a lesson worth not relearning:
+
+- **NaN could enter and never leave.** `js/eta.js`'s `smooth()` used an EMA that
+  silently absorbs a NaN input and then can never recover from it (every future
+  comparison against a stored NaN is also false, so it never re-snaps to a good
+  value). The real entry points are now closed at the source instead: `js/api.js`
+  normalises `lat`/`lon` to `number | null` like `heading`/`speed` already were,
+  and `js/eta.js`'s distance fallback only computes a real haversine when every
+  coordinate involved is an actual number, falling back to the honest flat
+  default (300m) otherwise — never letting `null` silently coerce to `0` and
+  measure from the equator. `smooth()` itself still has a defensive
+  `Number.isFinite` guard as a last resort, and `js/history.js`'s `record()`
+  gate now uses `Number.isFinite` too, since `NaN < X` and `NaN > X` are both
+  false and used to slip a poisoned sample past the sanity check.
+- **A live status could be stale and still read as "right now."** A missing
+  `lastUpdated` was treated as fresh, not unknown, in three places (`eta.js`,
+  `ui-map.js`) — inverted from the intended defence. `at_stop`/`arriving` also
+  had no age qualifier at all despite being live-status fields that can
+  themselves be up to `STALE_MS` old, so "на постојка" could read as certain
+  when it was 89 seconds old.
+- **"сега" and a clamped range could overstate a low-confidence guess.** The
+  `сега`/`due` cutoff ran before the confidence check, and the EMA smoothing can
+  fall behind the wall clock for a low-confidence row (each poll closes only
+  25% of the gap), letting `predictedAt - now` cross the threshold while the raw
+  estimate was still minutes out. Confidence is now computed first and gates
+  both. Separately, `eta.js`'s low-confidence range clamped its low end up to 1
+  minute; it now uses the same `до N мин` form `timetable.js` already used for
+  the identical situation, rather than claiming a floor the estimate doesn't
+  support.
+- **"тргнал HH:MM" asserted a departure nobody observed.** Every row
+  `timetable.js` emits belongs to a trip with no live vehicle, and `arrival.time`
+  is 0 in every upstream entry (see above) — there is no confirmation it left.
+  Both `label()` and `detail()` now say `по ред HH:MM` (scheduled), not `тргнал`.
+- **A snapshot could outlive its service day unnoticed.** `runningWithoutGps()`
+  had no day check, so leaving the app open overnight let yesterday's trips be
+  filtered against today's clock and inflate the Information tab's "no GPS"
+  count. It now returns `[]` outright once `dayStamp !== stampOf(now)`.
+- **DST changeover shifts every scheduled prediction by an hour.** `nowMin` was
+  elapsed real time since a computed midnight instant, while `startMin` (parsed
+  from `"HH:MM:SS"`) is wall-clock — those diverge by exactly the DST offset on
+  the two days a year it changes. Both are now read from the wall clock
+  directly (`wallClockMinutes`/`wallClockInstant` in `timetable.js`), which
+  resolves the local offset for the instant in question and cancels the shift.
+- **Reliability, not honesty, but worth recording:** a boot failure used to
+  permanently kill the poll loop with no retry (`app.js` `bootNetwork()` now
+  retries with backoff); a `visibilitychange` resume used to poll immediately,
+  bypassing the deliberate exponential backoff every app-switch or screen
+  unlock (now routes through `pollRespectingBackoff()`); `poll()` had no
+  in-flight guard, so an out-of-order response could poison a learned segment
+  sample (now guarded); and rapidly tapping away from and back to the map tab
+  while Leaflet was still loading could create two `L.map()` instances on the
+  same container and permanently wedge the tab (`ui-map.js` now guards with a
+  `mounting` flag).
+- **Not fixed, logged as a known limitation:** `js/cache.js`'s `orderByKey`
+  keeps only a stop's first position within a pattern (needed so a bus is never
+  told it already passed a stop it is still approaching). Measured against the
+  live `/planner/routes` feed on 2026-09-08: of 204 patterns, exactly one
+  (route 63А pattern 11) repeats a stop consecutively, and that duplicate makes
+  two of that one pattern's segments permanently unlearnable — they fall back to
+  distance forever rather than ever getting a learned time. Narrow (one pattern)
+  and degrades honestly (worse estimate, not a wrong one), so left as recorded
+  debt rather than fixed under time pressure.
 
 ## Verification
 

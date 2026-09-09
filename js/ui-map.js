@@ -19,8 +19,10 @@
  *  - The API publishes no route geometry, only ordered stop ids, so a line
  *    drawn through stop coordinates cuts corners across blocks. It is drawn
  *    faintly and captioned rather than passed off as the real route.
- *  - Buses with no GPS cannot be drawn at all. The header says how many are
- *    missing so the map and the arrivals list never silently disagree.
+ *  - Buses with no GPS cannot be drawn at all - the /vehicles feed only ever
+ *    contains buses that ARE reporting, so its length can never be compared
+ *    against the drawn count to detect this. The header states how many are
+ *    missing only when the timetable download makes that count knowable.
  */
 (function () {
   const SB = (window.SB = window.SB || {});
@@ -32,6 +34,7 @@
 
   let map = null;
   let loading = null;
+  let mounting = false;  // true from the first mount() call until L.map() resolves
   let busLayer = null;
   let stopMarker = null;
   let routeLine = null;
@@ -120,7 +123,9 @@
 
     const pin = elRoot.querySelector('.bus-pin');
     if (pin) {
-      const stale = v.lastUpdated && (now - v.lastUpdated) > STALE_MS;
+      // Unknown fix age is not the same as a fresh one - if lastUpdated is
+      // missing this must read as stale, not slip past the check below.
+      const stale = !v.lastUpdated || (now - v.lastUpdated) > STALE_MS;
       pin.classList.toggle('is-stale', !!stale);
       pin.classList.toggle('is-here', !!v.servesCurrentStop);
     }
@@ -226,11 +231,16 @@
     SB.dom.clear(host);
 
     const drawn = markers.size;
-    const total = latest.vehicles.length;
-    const noCoords = total - drawn;
 
     const bits = [drawn + ' возила на мапа'];
-    if (noCoords > 0) bits.push(noCoords + ' без позиција');
+    // The /vehicles feed only ever contains buses that ARE reporting a
+    // position, so comparing its length to the drawn count cannot detect a
+    // bus with no GPS - that count only exists via the timetable, and only
+    // once one has been downloaded and is still fresh.
+    if (SB.timetable.isFresh()) {
+      const dark = SB.timetable.runningWithoutGps(latest.vehicles, latest.now).length;
+      if (dark > 0) bits.push(dark + ' без ГПС');
+    }
     const id = SB.uiStop.currentStopId();
     const stop = id != null ? SB.net.stopById.get(id) : null;
     if (stop) bits.push(stop.name);
@@ -238,7 +248,7 @@
     host.appendChild(el('div', { class: 'map-line', text: bits.join(' · ') }));
     host.appendChild(el('div', {
       class: 'map-note',
-      text: 'Позициите доцнат околу пола минута. Возилата без ГПС не се прикажани.'
+      text: 'Позициите доцнат околу пола минута. Возило без ГПС не може да се прикаже на мапа.'
     }));
 
     const actions = el('div', { class: 'map-actions' }, [
@@ -269,6 +279,15 @@
       onData(latest.vehicles, Date.now());
       return;
     }
+    // Tapping away from and back to this tab while Leaflet is still loading
+    // used to attach a second .then to the same loadLeaflet() promise, so both
+    // ran: two L.map(host, ...) calls on the same container. Leaflet keys
+    // initialisation off an expando on the container that host.textContent =
+    // '' does not clear, so the second call throws after already wiping the
+    // first map's DOM, leaving `map` pointing at a detached instance and every
+    // later mount() stuck on the early return above.
+    if (mounting) return;
+    mounting = true;
 
     host.textContent = 'Се вчитува мапата.';
     loadLeaflet().then(function (L) {
@@ -295,12 +314,14 @@
       onData(latest.vehicles, Date.now());
       watchSize(host);
       setTimeout(function () { map.invalidateSize(); }, 0);
+      mounting = false;
     }).catch(function () {
       host.textContent = '';
       host.appendChild(el('p', {
         class: 'empty',
         text: 'Мапата не може да се вчита. Проверете ја врската и обидете се повторно.'
       }));
+      mounting = false;
     });
   }
 

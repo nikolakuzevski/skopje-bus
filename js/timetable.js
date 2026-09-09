@@ -72,9 +72,26 @@
       String(d.getDate()).padStart(2, '0');
   }
 
-  function midnightOf(nowMs) {
+  /* Minutes since local midnight, read from the wall clock rather than from
+   * elapsed real time since a computed midnight instant. Those two diverge by
+   * a full hour on the two DST changeover days a year, because elapsed time
+   * is not wall-clock time while startMin (parsed from "HH:MM:SS") is. Reading
+   * the wall clock directly keeps both quantities in the same frame. */
+  function wallClockMinutes(nowMs) {
     const d = new Date(nowMs);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+  }
+
+  /* The anchor instant for a trip's departure, built the same wall-clock way -
+   * new Date(y, m, date, h, m) resolves the local offset for that exact
+   * instant, so it stays correct across the DST boundary instead of drifting
+   * with elapsed-time-since-midnight arithmetic. */
+  function wallClockInstant(nowMs, minutesSinceMidnight) {
+    const d = new Date(nowMs);
+    return new Date(
+      d.getFullYear(), d.getMonth(), d.getDate(),
+      Math.floor(minutesSinceMidnight / 60), minutesSinceMidnight % 60
+    ).getTime();
   }
 
   /* ---------------- building the compact timetable ---------------- */
@@ -210,13 +227,6 @@
 
   /* ---------------- prediction ---------------- */
 
-  /** Index of `stopId` along this trip, or -1. */
-  function positionIn(t, stopId) {
-    const stops = stopsOf(t);
-    if (!stops) return -1;
-    return stops.indexOf(Number(stopId));
-  }
-
   /** Seconds to travel stops[from] -> stops[to], learned where possible. */
   function traversalSeconds(t, from, to, hour) {
     const stops = stopsOf(t);
@@ -250,8 +260,11 @@
     }
     // Learned segments beat the distance fallback the curve was measured with,
     // so the band narrows as the app learns — but never below two minutes,
-    // because the departure time itself is only given to the minute.
-    const shrink = 1 - 0.4 * (learnedRatio || 0);
+    // because the departure time itself is only given to the minute. The 0.15
+    // factor is a conservative allowance, not a measured figure: ERROR_CURVE
+    // above was measured directly, this shrink has not been, so it is kept
+    // small until js/debug.js's scheduled-prediction track can check it.
+    const shrink = 1 - 0.15 * (learnedRatio || 0);
     return Math.max(2, Math.round(base * shrink));
   }
 
@@ -285,9 +298,8 @@
       if (v.tripId) liveByTrip.set(v.tripId, v);
     });
 
-    const midnight = midnightOf(now);
     const hour = new Date(now).getHours();
-    const nowMin = (now - midnight) / 60000;
+    const nowMin = wallClockMinutes(now);
     const out = [];
 
     entries.forEach(function (entry) {
@@ -306,7 +318,7 @@
        * live feed genuinely cannot know. */
       if (liveByTrip.has(t.tripId)) return;
 
-      const anchorMs = midnight + t.startMin * 60000;
+      const anchorMs = wallClockInstant(now, t.startMin);
       const fromPos = 0;
       const state = nowMin >= t.startMin ? 'no_signal' : 'predicted';
 
@@ -331,7 +343,6 @@
         headsign: destinationName(t),
         departureMin: t.startMin,
         stopsFromOrigin: entry.position,
-        stopsAway: null,
         predictedAt: predictedAt,
         // Suppressed deliberately when the measured error makes a number
         // meaningless. The row still appears; it just does not claim a minute.
@@ -340,7 +351,6 @@
         elapsedMin: elapsedMin,
         learnedRatio: learnedRatio,
         started: nowMin >= t.startMin,
-        tracked: false,
         state: state
       });
     });
@@ -359,7 +369,11 @@
   /** Trips that should be running now but have no live vehicle. */
   function runningWithoutGps(liveVehicles, nowMs) {
     const now = nowMs || Date.now();
-    const nowMin = (now - midnightOf(now)) / 60000;
+    // A snapshot that has outlived its service day (left the app open
+    // overnight) must not be filtered against a fresh nowMin - that reads
+    // yesterday's trips as still running today and inflates this count.
+    if (dayStamp !== stampOf(now)) return [];
+    const nowMin = wallClockMinutes(now);
     const liveTripIds = new Set((liveVehicles || [])
       .map(function (v) { return v.tripId; }).filter(Boolean));
 
@@ -388,14 +402,16 @@
    */
   function label(row, nowMs) {
     const now = nowMs || Date.now();
-    const departWord = row.started ? 'тргнал' : 'тргнува';
-    const depart = departWord + ' ' + clockOf(row.departureMin);
+    // "тргнал" (past tense) would assert a departure nobody observed - every
+    // row here is a trip with no live vehicle, and arrival.time is 0 in every
+    // upstream entry (see file header), so there is no confirmation that it
+    // actually left. "по ред" (scheduled) states only what is actually known.
+    const depart = 'по ред ' + clockOf(row.departureMin);
 
-    /* "предвидување" is the word the user asked for, and it applies to every
-     * row whose bus has not reported a position. A row anchored on a real live
-     * position has started and IS being tracked, so calling it a prediction
-     * would understate what is known; it reuses eta.js's existing "приближно". */
-    const sub = row.tracked ? 'приближно' : 'предвидување';
+    // Every row this module emits has no live vehicle - anything tracked is
+    // shown by eta.js instead, which uses its own "приближно"/exact wording.
+    // So "предвидување" applies unconditionally here, exactly as asked for.
+    const sub = 'предвидување';
 
     if (!row.estimateUsable) return { text: depart, sub: sub };
 
@@ -415,10 +431,9 @@
 
   /** The secondary line under a scheduled row. */
   function detail(row) {
-    const bits = [(row.started ? 'тргнал ' : 'тргнува ') + clockOf(row.departureMin)];
-    if (row.state === 'no_signal') bits.push('нема сигнал од возилото');
-    if (row.tracked && row.stopsAway != null) bits.push(row.stopsAway + ' постојки до тука');
-    else if (row.stopsFromOrigin > 0) bits.push(row.stopsFromOrigin + ' постојки од почетна');
+    const bits = ['по ред ' + clockOf(row.departureMin)];
+    if (row.state === 'no_signal') bits.push('нема возило пријавено на оваа тура');
+    if (row.stopsFromOrigin > 0) bits.push(row.stopsFromOrigin + ' постојки од почетна');
     return bits.join(' · ');
   }
 

@@ -20,10 +20,14 @@
 
   /* Prefixed by kind so a trip that starts mid-session changes key, the list
    * signature changes with it, and the row moves from the scheduled group to
-   * the live group instead of being repainted in place. */
+   * the live group instead of being repainted in place. tripId is included
+   * too: vehicleId alone is stable across a bus flipping to a different trip
+   * (e.g. reaching a terminus and taking the return pattern), which used to
+   * leave that row's badge and headsign frozen on the old trip because
+   * buildRow only writes them once. */
   function key(a) {
     if (a.scheduled) return 's|' + a.tripId;
-    return (a.far ? 'f|' : 'l|') + a.vehicleId;
+    return (a.far ? 'f|' : 'l|') + a.vehicleId + '|' + a.tripId;
   }
 
   function stopsAwayText(a) {
@@ -126,9 +130,14 @@
       lbl = SB.eta.label(a, now);
     }
 
+    // The time column already says the data is old or gone; the sub-line
+    // (stops-away, delay) is built from that same refused data and must say
+    // so too, rather than reading as a confident present-tense position next
+    // to a right-hand column admitting it is not current.
+    const suppressed = !a.scheduled && (feedDown || a.state === 'stale');
     r.timeText.textContent = lbl.text;
     r.timeSub.textContent = lbl.sub;
-    r.sub.textContent = stopsAwayText(a) + delayText(a);
+    r.sub.textContent = (suppressed ? 'последно: ' : '') + stopsAwayText(a) + delayText(a);
     r.li.className = 'arrival is-' +
       (a.scheduled ? 'predicted' : (feedDown ? 'stale' : (a.far ? 'far' : a.state)));
   }
@@ -157,9 +166,16 @@
         empty.hidden = true;
       } else {
         empty.hidden = false;
+        // "no bus is coming" is only true once a poll has actually confirmed
+        // it. Before the first response, or with the feed down, this used to
+        // assert it anyway - stated flatly, at boot, before any data exists.
         empty.textContent = stopId == null
           ? 'Изберете постојка за да ги видите доаѓањата.'
-          : 'Ниту едно возило не е тргнато кон оваа постојка во моментов.';
+          : age == null
+            ? 'Се вчитуваат доаѓањата.'
+            : age > FEED_STALE_MS
+              ? 'Нема податоци од изворот, последно пред ' + SB.dom.fmtAge(age / 1000) + '.'
+              : 'Ниту едно возило не е тргнато кон оваа постојка во моментов.';
       }
     }
   }

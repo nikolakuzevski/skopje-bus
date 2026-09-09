@@ -133,6 +133,13 @@
   /** Fetch a fresh snapshot and persist it. */
   function refresh() {
     return Promise.all([SB.api.routes(), SB.api.stops()]).then(function (both) {
+      // An upstream hiccup returning [] must not wipe a good snapshot, in
+      // memory or on disk. Callers already treat a rejected refresh() as
+      // "keep serving the stale snapshot" (see ensure() below), so refusing
+      // here is enough to protect both copies.
+      if (!both[0].length || !both[1].length) {
+        throw new Error('refresh() got an empty routes/stops snapshot, refusing to overwrite');
+      }
       const savedAt = Date.now();
       buildIndexes(both[0], both[1]);
       net.loadedAt = savedAt;

@@ -35,7 +35,11 @@
     return fetch(ROOT + path, { signal: ctrl.signal, cache: 'no-store' })
       .then(function (res) {
         if (!res.ok) throw ApiError('http', 'HTTP ' + res.status + ' for ' + path);
-        return res.json().catch(function () {
+        return res.json().catch(function (e) {
+          // An abort mid-download rejects the in-flight res.json() the same
+          // way malformed JSON would. Without this check it gets misreported
+          // as 'parse' instead of 'timeout', which shows the wrong banner.
+          if (e && e.name === 'AbortError') throw ApiError('timeout', 'Timed out: ' + path);
           throw ApiError('parse', 'Malformed JSON from ' + path);
         });
       })
@@ -64,8 +68,11 @@
       patternIndex: v.patternIndex,
       tripId: v.tripId ? String(v.tripId) : null,
       headsign: v.headsign || '',
-      lat: v.latitude,
-      lon: v.longitude,
+      // Guarded like heading/speed below: an unguarded null/non-number here
+      // used to flow straight into haversine() as NaN, and once NaN entered
+      // eta.js's held-instant smoothing it could never self-correct.
+      lat: typeof v.latitude === 'number' ? v.latitude : null,
+      lon: typeof v.longitude === 'number' ? v.longitude : null,
       heading: typeof v.heading === 'number' ? v.heading : null,
       speed: typeof v.speed === 'number' ? v.speed : null,
       nextStopId: v.stopId != null ? v.stopId : (v.currentStopId != null ? v.currentStopId : null),

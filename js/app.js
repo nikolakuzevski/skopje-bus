@@ -18,6 +18,7 @@
   let pollTimer = null;
   let tickTimer = null;
   let activeTab = 'stop';
+  let polling = false;   // true while a /vehicles request is in flight
 
   /* ---------------- status and errors ---------------- */
 
@@ -29,25 +30,37 @@
     b.textContent = text;
   }
 
+  /* The word ("во живо"/"застарено"/...) is the only part that belongs in the
+   * aria-live region. The age ("пред N сек") changes every second by design,
+   * and an aria-live region announces every text change it sees - wiring the
+   * age into it would have a screen reader read out the feed's age once a
+   * second, forever. Only writing #status-state when the word actually
+   * changes keeps that region quiet except for real state transitions. */
   function paintStatus(now) {
     const s = SB.dom.qs('#status');
-    if (!s) return;
+    const stateEl = SB.dom.qs('#status-state');
+    const ageEl = SB.dom.qs('#status-age');
+    if (!s || !stateEl || !ageEl) return;
+
+    function setWord(cls, word) {
+      s.className = 'status ' + cls;
+      if (stateEl.textContent !== word) stateEl.textContent = word;
+    }
+
     if (!lastPollAt) {
-      s.className = 'status';
-      s.textContent = failures ? 'нема врска' : 'се вчитува';
+      setWord('', failures ? 'нема врска' : 'се вчитува');
+      ageEl.textContent = '';
       return;
     }
     const age = (now - lastPollAt) / 1000;
     if (failures >= 2) {
-      s.className = 'status down';
-      s.textContent = 'нема врска · пред ' + SB.dom.fmtAge(age);
+      setWord('down', 'нема врска');
     } else if (age > 60) {
-      s.className = 'status stale';
-      s.textContent = 'застарено · пред ' + SB.dom.fmtAge(age);
+      setWord('stale', 'застарено');
     } else {
-      s.className = 'status live';
-      s.textContent = 'во живо · пред ' + SB.dom.fmtAge(age);
+      setWord('live', 'во живо');
     }
+    ageEl.textContent = ' · пред ' + SB.dom.fmtAge(age);
   }
 
   /* ---------------- the poll loop ---------------- */
@@ -62,8 +75,15 @@
   function poll() {
     clearTimeout(pollTimer);
     if (document.hidden) return;
+    // Without this, the timer, a visibility resume, and setStop's pollNow()
+    // could all have a request in flight at once; a response landing out of
+    // order can stamp a stale vehicle snapshot as the newest one, which
+    // history.js would then read as a real (and wrong) segment timing.
+    if (polling) return;
+    polling = true;
 
     SB.api.vehicles().then(function (list) {
+      polling = false;
       const now = Date.now();
       vehicles = list;
       lastPollAt = now;
@@ -77,6 +97,7 @@
       paintStatus(now);
       scheduleNext();
     }).catch(function (err) {
+      polling = false;
       failures += 1;
       if (err.kind === 'offline') {
         setBanner('Нема интернет врска. Се прикажуваат последните познати податоци.');
@@ -88,6 +109,16 @@
       paintStatus(Date.now());
       scheduleNext();
     });
+  }
+
+  /** Poll now only if the backoff window since the last attempt has passed. */
+  function pollRespectingBackoff() {
+    const factor = Math.min(Math.pow(2, failures), MAX_BACKOFF);
+    if (!lastPollAt || Date.now() - lastPollAt > POLL_MS * factor) {
+      poll();
+    } else {
+      scheduleNext();
+    }
   }
 
   /* ---------------- geolocation ---------------- */
@@ -178,39 +209,56 @@
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
         clearTimeout(pollTimer);
+        clearInterval(tickTimer);
+        tickTimer = null;
         SB.history.flush();
       } else {
-        poll();
+        if (!tickTimer) tickTimer = setInterval(tick, 1000);
+        // Every app switch and screen unlock fires this. Polling immediately
+        // every time would defeat the deliberate exponential backoff during an
+        // upstream outage - ordinary backgrounding shouldn't erase a designed
+        // safeguard against hammering an undocumented API.
+        pollRespectingBackoff();
       }
     });
     window.addEventListener('pagehide', function () { SB.history.flush(); });
 
-    Promise.all([SB.history.load(), SB.debug.load()])
-      .then(function () { return SB.net.ensure(); })
-      // Today's timetable, from cache only. Never a 12 MB download on boot.
-      .then(function () { return SB.timetable.ensure(Date.now(), { cachedOnly: true }); })
-      .then(function () {
-        // A screen exists from here on, before any live data arrives.
-        const initial = chooseInitialStop();
-        if (initial != null) SB.uiStop.setStop(initial);
-        showTab('stop');
-        poll();
+    let bootRetryMs = 15000;
 
-        // Location is a nicety, never a blocker: it can only override an
-        // empty screen, not a stop the user deliberately pinned.
-        if (initial == null) {
-          locate(false).then(function (stop) {
-            if (stop && SB.uiStop.currentStopId() == null) SB.uiStop.setStop(stop.id);
-          }).catch(function () { /* silent: the picker still works */ });
-        } else {
-          locate(false).then(function () { SB.uiStop.refreshHead(); })
-            .catch(function () { /* silent */ });
-        }
-      })
-      .catch(function () {
-        setBanner('Не можам да ги вчитам линиите и постојките. Проверете ја врската.');
-        showTab('stop');
-      });
+    function bootNetwork() {
+      Promise.all([SB.history.load(), SB.debug.load()])
+        .then(function () { return SB.net.ensure(); })
+        // Today's timetable, from cache only. Never a 12 MB download on boot.
+        .then(function () { return SB.timetable.ensure(Date.now(), { cachedOnly: true }); })
+        .then(function () {
+          // A screen exists from here on, before any live data arrives.
+          const initial = chooseInitialStop();
+          if (initial != null) SB.uiStop.setStop(initial);
+          showTab('stop');
+          poll();
+
+          // Location is a nicety, never a blocker: it can only override an
+          // empty screen, not a stop the user deliberately pinned.
+          if (initial == null) {
+            locate(false).then(function (stop) {
+              if (stop && SB.uiStop.currentStopId() == null) SB.uiStop.setStop(stop.id);
+            }).catch(function () { /* silent: the picker still works */ });
+          } else {
+            locate(false).then(function () { SB.uiStop.refreshHead(); })
+              .catch(function () { /* silent */ });
+          }
+        })
+        .catch(function () {
+          // Without a retry here, one failed boot fetch left the app
+          // permanently stuck with an empty stop picker and a dead poll loop -
+          // the user's only recovery was closing and reopening the PWA.
+          setBanner('Не можам да ги вчитам линиите и постојките. Се обидувам повторно.');
+          showTab('stop');
+          setTimeout(bootNetwork, bootRetryMs);
+          bootRetryMs = Math.min(bootRetryMs * 2, 120000);
+        });
+    }
+    bootNetwork();
 
     window.addEventListener('sb:network', function () {
       if (activeTab === 'stop') SB.uiStop.render();

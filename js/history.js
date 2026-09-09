@@ -64,7 +64,11 @@
   }
 
   function record(patternKey, fromPos, hour, seconds) {
-    if (seconds < MIN_SEC || seconds > MAX_SEC) return;
+    // Number.isFinite, not the range check alone: NaN fails both `<` and `>`
+    // comparisons, so a non-finite duration would otherwise slip through and
+    // get written to durable storage, poisoning that bucket's median across
+    // reloads until MAX_SAMPLES further samples evict it.
+    if (!Number.isFinite(seconds) || seconds < MIN_SEC || seconds > MAX_SEC) return;
     const k = bucketKey(patternKey, fromPos, hour);
     let arr = samples.get(k);
     if (!arr) { arr = []; samples.set(k, arr); }
