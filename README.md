@@ -28,14 +28,13 @@ refresh button. There is no way to ask the source for just one bus's position,
 so it re-fetches everything, but that row is the one you tapped, and it lands
 immediately instead of waiting out the rest of the poll interval.
 
-**Buses that haven't left yet, shown honestly.** Download the timetable from
-the Information tab and any bus due to depart within 40 minutes shows up,
-marked "предвидување". A limit worth knowing, and worth saying plainly: JSP
-does not publish a forward timetable anywhere reachable — checked directly,
-not assumed. Its feed only ever lists buses already dispatched, so most of the
-time this list will be short or empty, and that is the real data talking, not
-a broken feature. It never mixes in already-departed buses just to look fuller
-— those get counted separately, honestly, on the Information tab instead.
+**Buses that haven't left yet, shown honestly.** Any bus due at your stop
+within 40 minutes shows up automatically, marked "предвидување" — pulled from
+JSP's real per-stop schedule (fetched fresh for whichever stop you're looking
+at) and corrected against live GPS wherever a bus on that schedule is already
+being tracked. Where that correction exists, the range shown is tight; further
+out, it stays wide on purpose rather than pretending to a precision nobody
+measured. It never mixes in already-departed buses just to look fuller.
 
 **Tap a bus to watch just that one.** No standing map of every bus in the
 city — tap any row and it opens full screen: minutes to arrival, how many

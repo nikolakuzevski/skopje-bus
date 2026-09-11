@@ -52,55 +52,26 @@
 
     host.appendChild(el('h2', { text: 'Возен ред' }));
     host.appendChild(el('p', {
-      text: 'Автобусите со ГПС сигнал секогаш се прикажуваат, и оние што се уште далеку по линијата. Ова преземање додава тргнувања што допрва следат во следните 40 минути (на постојката, означени „предвидување“), плус колку возила во моментов се во движење без ГПС сигнал (бројката подолу).'
+      text: 'Автобусите со ГПС сигнал секогаш се прикажуваат, и оние што се уште далеку по линијата. На нив, за постојката што моментно ја гледате, се додаваат сите преостанати тргнувања за остатокот од денот што допрва следат - означени „предвидување“ - до 40 минути однапред.'
     }));
     host.appendChild(el('p', {
-      text: 'Важно: превозникот не објавува возен ред нанапред - неговиот систем пријавува само возила што веќе тргнале. Затоа тргнувања што допрва следат ретко се наоѓаат во податоците, дури и веднаш по преземање; кога ги нема, тоа значи дека моментално навистина ги нема во системот, не дека преземањето не успеало.'
-    }));
-    host.appendChild(el('p', {
-      text: 'Преземеното важи околу половина час. Големо е околу 12 МБ, затоа не се прави автоматски.'
+      text: 'Овој возен ред се презема одделно за секоја постојка (неколку килобајти) и сам се освежува во позадина додека ја гледате таа постојка. За тргнувањата што во моментов се следат со ГПС сигнал, времето е коригирано според реалната позиција; за останатите, само според редот на возење.'
     }));
 
-    const loaded = SB.timetable.isLoaded();
-    const fresh = SB.timetable.isFresh();
-    const loadBtn = el('button', { class: 'btn', type: 'button' },
-      loaded ? 'Преземи повторно' : 'Преземи возен ред');
-    loadBtn.addEventListener('click', function () {
-      if (SB.timetable.saveDataOn()) {
-        SB.dom.toast('Штедењето на интернет е вклучено, па возниот ред не се презема.', true);
-        return;
-      }
-      loadBtn.disabled = true;
-      loadBtn.textContent = 'Се презема';
-      SB.timetable.refresh(Date.now())
-        .then(function (trips) {
-          SB.dom.toast(trips.length
-            ? trips.length + ' тргнувања во возниот ред.'
-            : 'Превозникот моментално не објавува ниту едно возило.');
-          SB.app.repaintStop();
-          // render() rebuilds this whole panel, including loadBtn itself, so
-          // any write to loadBtn after this point would land on a node no
-          // longer in the document. Reset it before rebuilding, not after.
-          render();
-        })
-        .catch(function () {
-          SB.dom.toast('Возниот ред не се презеде.', true);
-          loadBtn.disabled = false;
-          loadBtn.textContent = SB.timetable.isLoaded() ? 'Преземи повторно' : 'Преземи возен ред';
-        });
-    });
-    host.appendChild(el('div', { class: 'stop-actions' }, [loadBtn]));
-
-    if (loaded) {
-      const noGps = SB.timetable.runningWithoutGps(SB.app.lastVehicles(), Date.now()).length;
-      host.appendChild(dl([
-        ['тргнувања во возниот ред', String(SB.timetable.tripCount())],
-        ['тргнати без ГПС сигнал', String(noGps)],
-        ['преземено пред', SB.dom.fmtAge((Date.now() - SB.timetable.loadedAt()) / 1000)],
-        ['се уште важи', fresh ? 'да' : 'не, преземете повторно']
-      ]));
+    const stopId = SB.uiStop.currentStopId();
+    if (stopId == null) {
+      host.appendChild(el('p', { text: 'Нема избрано постојка.' }));
+    } else if (!SB.timetable.hasDataFor(stopId)) {
+      host.appendChild(el('p', { text: 'Се вчитува возниот ред за оваа постојка.' }));
     } else {
-      host.appendChild(el('p', { text: 'Возниот ред не е преземен.' }));
+      const entries = SB.timetable.entriesFor(stopId);
+      const realtimeCount = entries.filter(function (t) { return t.realtime; }).length;
+      const age = SB.timetable.ageMsFor(stopId, Date.now());
+      host.appendChild(dl([
+        ['тргнувања денес на оваа постојка', String(entries.length)],
+        ['од нив, ГПС-коригирани во моментов', String(realtimeCount)],
+        ['освежено пред', age == null ? 'непознато' : SB.dom.fmtAge(age / 1000)]
+      ]));
     }
 
     host.appendChild(el('h2', { text: 'Поставки' }));

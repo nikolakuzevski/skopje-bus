@@ -226,7 +226,7 @@
       const lbl = SB.timetable.label(a, now);
       els.time.textContent = lbl.text;
       els.timeSub.textContent = lbl.sub;
-      els.age.textContent = SB.timetable.detail(a);
+      els.age.textContent = SB.timetable.detail(a, now);
     } else {
       const lbl = SB.eta.label(a, now);
       els.time.textContent = lbl.text;

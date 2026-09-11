@@ -47,6 +47,18 @@
     Array.from(refreshing).forEach(stopSpinning);
   });
 
+  /* js/timetable.js fetches per-stop schedule data on its own schedule
+   * (on stop selection, then background-refreshed) rather than as part of
+   * the vehicles poll. When one of those fetches lands for the stop actually
+   * on screen, the merged list needs recomputing from it even though no
+   * vehicles poll fired - otherwise a freshly opened stop stays without its
+   * schedule rows until the next 15s tick happens to land. */
+  window.addEventListener('sb:timetable', function (e) {
+    if (stopId != null && e.detail && e.detail.stopId === stopId) {
+      computeArrivals(SB.app.lastVehicles(), Date.now());
+    }
+  });
+
   /* Prefixed by kind so a trip that starts mid-session changes key, the list
    * signature changes with it, and the row moves from the scheduled group to
    * the live group instead of being repainted in place. tripId is included
@@ -59,8 +71,8 @@
     return (a.far ? 'f|' : 'l|') + a.vehicleId + '|' + a.tripId;
   }
 
-  function stopsAwayText(a) {
-    if (a.scheduled) return SB.timetable.detail(a);
+  function stopsAwayText(a, now) {
+    if (a.scheduled) return SB.timetable.detail(a, now);
     if (a.stopsAway === 0) return 'следна постојка';
     if (a.stopsAway === 1) return '1 постојка до тука';
     return a.stopsAway + ' постојки до тука';
@@ -203,7 +215,7 @@
     const suppressed = !a.scheduled && (feedDown || a.state === 'stale');
     r.timeText.textContent = lbl.text;
     r.timeSub.textContent = lbl.sub;
-    r.sub.textContent = (suppressed ? 'последно: ' : '') + stopsAwayText(a) + delayText(a);
+    r.sub.textContent = (suppressed ? 'последно: ' : '') + stopsAwayText(a, now) + delayText(a);
     r.li.className = 'arrival is-' +
       (a.scheduled ? 'predicted' : (feedDown ? 'stale' : (a.far ? 'far' : a.state)));
   }
@@ -246,6 +258,39 @@
     }
   }
 
+  /* Shared by the vehicles poll (onData below) and by a schedule fetch landing
+   * out of band (the 'sb:timetable' listener above) - both need to rebuild the
+   * same merged list from whatever is currently known, just triggered by
+   * different events. */
+  function computeArrivals(vehicles, now) {
+    /* Two passes over the same live feed. The near pass is the confident
+     * list; the far pass picks up buses that are genuinely tracked but still
+     * many stops up the line, which the old cap hid entirely. This needs no
+     * schedule fetch - it is the same 36 KB poll either way - so it is free
+     * and always on. */
+    const all = SB.eta.arrivalsForStop(stopId, vehicles, now, { maxStopsAway: FAR_MAX_STOPS });
+    const live = [];
+    const far = [];
+    all.forEach(function (a) {
+      if (a.stopsAway <= NEAR_MAX_STOPS) live.push(a);
+      else far.push(Object.assign({}, a, { far: true }));
+    });
+
+    // Whatever js/timetable.js currently has cached for this stop - every
+    // trip not already shown live above, due within its horizon. Empty until
+    // the first fetch for this stop lands; see setStop's ensureForStop call.
+    const scheduled = SB.timetable.upcomingForStop(stopId, all, now);
+
+    arrivals = live.concat(far, scheduled);
+    // Only the confident near rows feed the accuracy stats, so the figures in
+    // the Information tab keep measuring the live engine and are not diluted
+    // by deliberately wide far or schedule ranges.
+    SB.debug.recordPredictions(stopId, live, now);
+    renderList(now);
+    // No-ops instantly if nothing is open - see js/ui-detail.js.
+    if (SB.uiDetail) SB.uiDetail.update(arrivals, now);
+  }
+
   SB.uiStop = {
     currentStopId: function () { return stopId; },
 
@@ -259,41 +304,16 @@
       renderHead();
       renderList(Date.now());
       if (SB.app) SB.app.pollNow();
+      // Fires 'sb:timetable' (handled above) once it lands - the merged list
+      // is recomputed from that event, not awaited here, so opening a stop
+      // never blocks on this fetch.
+      SB.timetable.ensureForStop(id, Date.now());
     },
 
     /** Called by app.js after every successful poll. */
     onData: function (vehicles, now) {
       if (stopId == null) { renderList(now); return; }
-
-      /* Two passes over the same live feed. The near pass is the confident
-       * list; the far pass picks up buses that are genuinely tracked but still
-       * many stops up the line, which the old cap hid entirely. This needs no
-       * timetable download - it is the same 36 KB poll either way - so it is
-       * free and always on. */
-      const all = SB.eta.arrivalsForStop(stopId, vehicles, now, { maxStopsAway: FAR_MAX_STOPS });
-      const live = [];
-      const far = [];
-      all.forEach(function (a) {
-        if (a.stopsAway <= NEAR_MAX_STOPS) live.push(a);
-        else far.push(Object.assign({}, a, { far: true }));
-      });
-
-      // The timetable adds only trips not yet dispatched - what the live feed
-      // genuinely cannot know. Already-departed, no-GPS trips are a different
-      // question with a different answer; see js/timetable.js's header for why
-      // they are not mixed in here.
-      const scheduled = SB.timetable.isFresh()
-        ? SB.timetable.upcomingForStop(stopId, all, vehicles, now)
-        : [];
-
-      arrivals = live.concat(far, scheduled);
-      // Only the confident near rows feed the accuracy stats, so the figures in
-      // the Information tab keep measuring the live engine and are not diluted
-      // by deliberately wide far or schedule ranges.
-      SB.debug.recordPredictions(stopId, live, now);
-      renderList(now);
-      // No-ops instantly if nothing is open - see js/ui-detail.js.
-      if (SB.uiDetail) SB.uiDetail.update(arrivals, now);
+      computeArrivals(vehicles, now);
     },
 
     /** Called once per second. Only touches text. */

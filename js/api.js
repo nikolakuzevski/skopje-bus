@@ -17,7 +17,15 @@
     routes: 'transport/planner/routes',
     stops: 'transport/planner/stops',
     alerts: 'transport/gtfsrt/alerts?mediaType=WebPortal',
-    tripUpdates: 'transport/gtfsrt/tripupdates'
+    tripUpdates: 'transport/gtfsrt/tripupdates',
+    // Found 2026-09-11 inspecting skopjebus.mk's own network traffic - not in
+    // any earlier survey of this API. Returns, per route serving the stop, the
+    // remaining scheduled departures for the rest of the SERVICE day (not just
+    // currently-dispatched trips): a real per-stop timetable, GPS-corrected
+    // (`realtime`/`arrivalDelay`) for whichever of those trips is currently
+    // tracked. ~5 KB and ~500 ms for a busy stop, so unlike tripUpdatesExpensive
+    // this is cheap enough to call per stop, on demand. See js/timetable.js.
+    stopTimes: 'transport/planner/stops/'
   };
 
   /* Upstream failure is a normal, expected state for this app, not a crash.
@@ -104,6 +112,26 @@
     };
   }
 
+  /* Upstream nests times under `{route: {routeId, index}, times: [...]}` per
+   * route serving the stop; flattened here so every other file deals with one
+   * flat list of stop-time rows, matching the shape of everything else api.js
+   * hands out. A row with no tripId or no scheduledArrival is dropped rather
+   * than passed through half-formed - both have been present on live data for
+   * at least one route ever seen at a stop (an unscheduled/withdrawn entry). */
+  function normaliseStopTime(routeInfo, t) {
+    return {
+      tripId: t.tripId != null ? String(t.tripId) : null,
+      routeId: routeInfo.routeId,
+      patternIndex: routeInfo.index,
+      headsign: t.headsign || '',
+      scheduledArrival: ms(t.scheduledArrival),
+      // Upstream's own GPS-corrected delay for the trips it is currently
+      // tracking; 0 (not missing) for every trip it is not - see `realtime`.
+      arrivalDelaySec: typeof t.arrivalDelay === 'number' ? t.arrivalDelay : 0,
+      realtime: !!t.realtime
+    };
+  }
+
   function normaliseStop(s) {
     return {
       id: s.id,
@@ -156,12 +184,30 @@
     },
 
     /* GTFS-RT TripUpdates: ~12 MB decoded and unfilterable server-side, so this
-     * is deliberately NOT on any poll loop. It is the only source that knows
-     * about running trips whose bus has no live GPS. Callers must treat it as
-     * an expensive, explicit, user-triggered action. Note `arrival.time` comes
-     * back as 0 upstream — only `delay` is populated. */
+     * is deliberately NOT on any poll loop. Kept only as a documented dead end
+     * (see CLAUDE.md) — js/timetable.js no longer calls this; stopTimes below
+     * replaced it as the schedule source. Note `arrival.time` comes back as 0
+     * upstream on this feed — only `delay` is populated. */
     tripUpdatesExpensive: function () {
       return get(PATHS.tripUpdates, 45000);
+    },
+
+    /** This stop's remaining scheduled departures for the rest of the service
+     * day, GPS-corrected where a trip is currently tracked. Small, filtered
+     * server-side by stop — safe to call per stop, unlike tripUpdatesExpensive. */
+    stopTimes: function (stopId) {
+      return get(PATHS.stopTimes + encodeURIComponent(stopId) + '/times', 9000)
+        .then(function (routes) {
+          const out = [];
+          (routes || []).forEach(function (r) {
+            const info = r.route || {};
+            (r.times || []).forEach(function (t) {
+              if (t.tripId == null || !t.scheduledArrival) return;
+              out.push(normaliseStopTime(info, t));
+            });
+          });
+          return out;
+        });
     }
   };
 })();

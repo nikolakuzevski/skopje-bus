@@ -49,7 +49,8 @@ JSP's, read from `skopjebus.mk/wp-content/plugins/planner/data/settings.json`.
 | `transport/planner/vehicles/route/N` | same for one route | |
 | `transport/planner/routes` | routes with ordered per-pattern stop lists | 92 KB, cached a day |
 | `transport/planner/stops` | ~1431 stops with coordinates | cached a day |
-| `transport/gtfsrt/tripupdates` | GTFS-RT trips | **12 MB, ~1.2s**, no server-side filter |
+| `transport/planner/stops/{id}/times` | that stop's remaining scheduled departures today, GPS-corrected where tracked | ~5 KB, ~500 ms — see js/timetable.js |
+| `transport/gtfsrt/tripupdates` | GTFS-RT trips | **12 MB, ~1.2s**, no server-side filter; superseded by the row above, kept only as a documented dead end |
 | `transport/gtfsrt/alerts?mediaType=WebPortal` | service alerts | tiny, unused so far |
 
 **This API is undocumented and can change or close without notice.** That is the
@@ -62,12 +63,10 @@ Two upstream quirks worth knowing before trusting a field:
 - The plain `/vehicles` list calls the bus's next stop `stopId`, while
   `/vehicles/route/N` calls the identical thing `currentStopId`. `api.js`
   collapses both to `nextStopId`.
-- In `tripupdates`, `arrival.time` is always `0` and `delay` is measured against
-  a static schedule this app cannot see (there is no public GTFS for Skopje).
-  On trips with no live vehicle that `delay` comes back as several hours, which
-  is why `js/untracked.js` deliberately does not read it. What TripUpdates is
-  reliably good for is *which trips exist right now and which vehicle is on
-  each* — nothing more.
+- In `tripupdates`, `arrival.time` is always `0`. This app no longer reads this
+  endpoint at all — see the "per-stop timetable" section below for why, and for
+  the correction to what used to be claimed here about no advance schedule
+  existing. It stays in the table above only as a documented dead end.
 
 ## Architecture
 
@@ -78,7 +77,7 @@ js/cache.js      IndexedDB kv + the routes/stops snapshot and its lookup indexes
 js/store.js      the ONLY file that touches localStorage (preferences only)
 js/history.js    learned stop-to-stop travel times
 js/eta.js        the prediction engine for buses with live GPS
-js/timetable.js  the daily timetable: hour-ahead rows and buses with no GPS
+js/timetable.js  per-stop scheduled departures (see transport/planner/stops/{id}/times)
 js/debug.js      predicted-vs-actual accuracy measurement
 js/ui-stop.js    the main screen: one stop, every bus coming to it
 js/ui-detail.js  full-screen view of ONE tapped bus, with its own small map
@@ -188,118 +187,91 @@ ahead it was looking. The Information tab shows mean absolute error and bias.
 **This is the only evidence that the app beats the one it replaces** — if a
 change to `eta.js` does not improve these numbers, it did not help.
 
-### The daily timetable (`js/timetable.js`)
+### The per-stop timetable (`js/timetable.js`)
 
-Absorbs the old `untracked.js` — both that feature and the hour-ahead list need
-the same 12 MB feed, so it is fetched once, reduced, and reused. It is an
-explicit tap in the Information tab, never automatic, and is skipped when
-`navigator.connection.saveData` is set.
+**Fourth revision — supersedes everything this section used to say.** Earlier
+revisions were built entirely on `transport/gtfsrt/tripupdates` (12 MB, a
+rolling record of dispatched trips, `arrival.time` always 0) because that was
+the only schedule-shaped endpoint a systematic survey had found: 12 candidate
+REST paths all 404, JSP's own web bundle referenced no timetable endpoint, and
+no GTFS static feed existed at any plausible URL or in any public catalog. That
+survey was real and its numbers were real, but its conclusion — **"JSP does not
+publish an advance timetable anywhere reachable"** — was wrong. It had not been
+found, which is a different claim, and this file stated the stronger one
+anyway. Worth remembering next time a "this data does not exist" conclusion
+gets written down: it means "not found by the methods tried," not "absent."
 
-**Reduction**: 3032 today-trips reduce to a ~73 KB compact table of
-`{tripId, routeId, patternIndex, startMin}`. 3023 of them (99.7%) match a known
-route pattern exactly on routeId plus ordered stop list, so they reuse the
-learned segment times; the 9 that do not carry their own stop list inline.
-The 12 MB object is dropped immediately after reduction.
+**What actually found it**: a user report that a stop showed only ~2 buses
+where the official app showed more. The live-position logic was instrumented
+and audited stop by stop and found to be correct on its own terms (0 pattern
+mismatches across 150+ live vehicles, busy stops correctly returning 6-42
+arrivals) — the 2-bus count for the reported stop was also correct, given only
+currently-dispatched buses to work from. That correctness was the tell: the
+complaint wasn't a bug in the logic, it was a ceiling built into the data
+source. Comparing the official skopjebus.mk site's own network traffic for the
+same stop (not another guess at a URL) turned up
+`transport/planner/stops/{id}/times` — every remaining scheduled departure for
+the rest of the service day, not just dispatched trips, each carrying a
+`realtime` flag and, when true, a GPS-measured `arrivalDelay` in seconds. For
+the reported stop it returned 19 departures. ~5 KB, ~500 ms.
 
-**THE CRITICAL LIMIT, measured repeatedly, from multiple angles, on different
-days: TripUpdates is a live operational feed, not a published timetable.**
-Trip-level: at 18:26, 5 of 1472 today-trips had a future start time; at 21:23,
-3 of 3013. It lists trips already dispatched, not a coming schedule. Endpoint
-level: 12 candidate REST paths on Modeshift all 404, and JSP's own web bundle
-references only five transit endpoints (`planner/routes`, `planner/stops`,
-`planner/plan`, `gtfsrt/alerts`, `planner/vehicles`) — no timetable endpoint
-exists there at all. Catalog level: neither transit.land nor
-mobilitydatabase.org lists a Skopje or JSP operator, and no GTFS static zip
-exists at any plausible URL on jsp.com.mk or skopjebus.mk (checked directly,
-all 404). A decade-old academic GTFS conversion of JSP's data exists in
-research papers but was never publicly hosted and is not maintained. **A full
-forward timetable cannot be built from this API or found anywhere else
-reachable. Do not add one without a genuinely new, verified data source** — and
-verify it the same way: check it actually answers "what departs in the next
-40 minutes that hasn't left yet", not just that a page mentions GTFS.
+**Trusted only after a real cross-check, not on the strength of looking
+official.** For 39 (stop, realtime-trip) pairs across four busy stops,
+upstream's `scheduledArrival + arrivalDelay` was compared against this app's
+own independent live-position estimate (`js/eta.js`) for the identical trip
+and stop. Close in — a few stops out — the two agreed within a couple of
+minutes, the same ballpark as `eta.js`'s own measured accuracy there. Far in (a
+trip still 15-20+ stops from the target) they diverged by 5-20 minutes, which
+reads as both sources doing the same kind of long-range extrapolation and
+disagreeing, not as one being wrong — and it is the same region the *old*
+`ERROR_CURVE` also refused to put a number on. That agreement pattern is what
+justified switching the schedule source to this endpoint rather than just
+adding it as one more field.
 
-Given that, what `js/timetable.js` can honestly do splits into two different
-questions, and — see the September revision below — they must not be mixed
-into one list:
-- **"What's still to come?"** (`upcomingForStop`) — only the rare trips this
-  rolling feed happens to catch before they depart. Usually few or none.
-- **"What's running dark?"** (`runningWithoutGps`) — trips already dispatched
-  with no live vehicle. Real, useful, but a different question with a
-  different answer, shown only in the Information tab's count.
+**Design consequence: this is now per-stop, not per-day.** At 12 MB the old
+feed forced a whole-network download, cached once and reused, with all the
+staleness bookkeeping that implies (`SNAPSHOT_TTL_MS`, `isFresh()` vs.
+`isLoaded()`, the empty-snapshot-after-midnight trap). At 5 KB for a busy stop,
+none of that scales-to-fit reasoning applies: `js/timetable.js` now fetches
+and caches per `stopId` (`ensureForStop`), refetched on a 60s TTL while that
+stop is on screen, fired on stop selection and re-fired whenever the cache
+lands (`sb:timetable` event, listened for in `ui-stop.js` so a freshly opened
+stop does not wait for the next 15s vehicles poll to show its schedule rows).
+There is no explicit "download the timetable" action any more, no
+`saveData`-gated big fetch, and no whole-network "buses running with no GPS"
+count — that stat's data source (a full-network view) no longer exists in this
+design, and nobody asked for it specifically; it was a side effect of the old
+architecture, not a request. Dedup against `eta.js`'s live rows is unchanged
+in spirit: `upcomingForStop` still drops any trip already present in
+`renderedArrivals` by `tripId`, because a live GPS anchor beats a schedule
+estimate every time.
 
-What the near/far live split in `ui-stop.js` does (below) is extend the stop
-view past `eta.js`'s old `MAX_STOPS_AWAY` cap — a real gain, and unrelated to
-either of the above, since it needs no schedule data at all.
+**Absolute times, not the old departure-time-plus-traversal hack.** The old
+design's only anchor was a trip's start time; everything past that was this
+app's own segment-by-segment guess (`history.js` learned times, falling back to
+haversine distance). `scheduledArrival` on this endpoint is already the time
+AT THE TARGET STOP, upstream's own figure — `traversalSeconds`,
+`patternLookup`, and the whole tripUpdates-reduction pipeline (`reduce`,
+`index`, `byStop`) are gone, not because they were wrong, but because the thing
+they existed to approximate is now given directly.
 
-**Because it is a rolling feed, a once-per-day snapshot is wrong**, and building
-one was a mistake worth not repeating. A snapshot cannot contain trips
-dispatched after it was taken, so `SNAPSHOT_TTL_MS` is 30 minutes and
-`isFresh()`, not `isLoaded()`, gates whether rows are drawn. Two related traps:
+**Uncertainty margins are a deliberate downgrade in confidence, not a measured
+curve — see the code comment on `MARGIN_REALTIME_MIN`/`MARGIN_NEAR_MIN`/
+`MARGIN_MID_MIN` in `js/timetable.js`.** The old `ERROR_CURVE` was measured
+against the old source; reusing its numbers for a different upstream source
+would be exactly the kind of unverified figure this project exists to avoid.
+`realtime: true` rows get a tight band (justified by the cross-check above);
+`realtime: false` rows get conservative, unmeasured bands that shrink to
+nothing past `MID_HORIZON_MIN` (30 min out), where only the clock time is
+shown. Once `js/debug.js` has accumulated enough predicted-vs-actual samples
+specifically sourced from this endpoint, these bands should be replaced with
+measured ones the same way `ERROR_CURVE` originally was — this is a documented
+placeholder, not a finished number. `HORIZON_MIN` stays 40, unchanged from the
+prior revision, per the same user follow-up that set it there.
 
-- **An empty snapshot must never be cached as authoritative.** Just after
-  midnight the feed legitimately returns zero trips (verified at 01:26: 0
-  entities, 0 vehicles, first departure 01:30). Caching that under today's date
-  made `ensure()` accept it for the rest of the day, so the whole feature would
-  have silently shown nothing until tomorrow. `fromCache` rejects empty.
-- **This module now supplies only what the live feed cannot know**: buses
-  running with no GPS, and trips that have not departed. Anything with a live
-  position belongs to eta.js.
-
-**Far buses come from the live feed, not from here.** `eta.js`'s
-`arrivalsForStop` takes an optional `maxStopsAway`; `ui-stop.js` calls it once
-at `FAR_MAX_STOPS` (40) and splits the result at `NEAR_MAX_STOPS` (12) into
-confident rows and wide-range `is-far` rows. That is the bulk of the hour-ahead
-view and it costs nothing extra — the same 36 KB poll either way — so it works
-with no download at all. Only the two cases above need the 12 MB.
-
-**Third revision: `upcomingForStop` now returns only not-yet-departed trips.**
-It originally also included already-departed, no-GPS trips (labelled
-`no_signal`), reasoning that a dispatched-but-dark bus is still real
-information. In practice that meant the main stop screen's "coming within the
-hour" list was dominated by buses that had **already left** — exactly the
-complaint that came back: "you're giving me the ones that already departed;
-give me the ones still coming." That complaint is the direct, predictable
-consequence of the data limit above (rarely-populated advance data, commonly-
-populated dispatched-trip data), not a bug in how the two were being
-combined — so the fix is not a smarter merge, it is **not merging them**:
-`upcomingForStop` now filters strictly on `nowMin < t.startMin` and drops
-`no_signal` (and the `state`/`started`/`tracked` fields that existed to
-distinguish it — every row here is now unconditionally "not yet departed", so
-`тргнува` is used, not the neutral `по ред`). The already-departed-dark
-question still has a real, honest answer — `runningWithoutGps`, unchanged,
-still feeding the Information tab's "тргнати без ГПС сигнал" count — it is
-just no longer answered on the same screen as "what's still coming", because
-those are different questions and conflating them is what caused the
-complaint. **`HORIZON_MIN` is 40, not 60**, per the same follow-up: the user
-asked for an hour first, then asked for 40 minutes once they had seen what an
-hour of this data actually looks like.
-
-`rendered` and `live` are still **different sets**, independently of the above,
-and conflating THEM was an earlier, separate bug: eta.js stops at its range
-cap, so a tracked bus can be absent from the list, and treating "absent" as
-"untracked" made 7 of 8 rows falsely claim `нема сигнал од возилото`. Dedupe
-against what eta.js *rendered*; decide tracked-ness from the *live vehicle
-list*. `upcomingForStop` takes both, and still needs to given the live-position
-short-circuit that remains in the function.
-
-**Uncertainty is measured, not invented.** A schedule-only prediction was
-compared against the live feed's own estimate for 100 buses. Median absolute
-error 3.7 min, p90 17.5 min, and error grows steeply with distance from the
-trip origin:
-
-| stops from origin | median | p90 |
-|---|---|---|
-| 1-3 | 1.6 min | 5.5 min |
-| 7-10 | 3.4 min | 7.1 min |
-| 16-25 | 7.6 min | 16.3 min |
-| 26-40 | 12.9 min | 36.5 min |
-| 41+ | 21.9 min | 54.4 min |
-
-`ERROR_CURVE` encodes that, and past `NO_ESTIMATE_AFTER_MIN` (35 minutes into a
-trip, where p90 exceeds half an hour) **no minute figure is printed at all** —
-only the departure time, which is the one thing upstream actually states. A row
-whose central estimate is already in the past shows `до N мин`, never a clamped
-`1-N мин`, which would claim the bus is still at least a minute away.
+The near/far live split in `ui-stop.js` is unaffected by any of this — it
+extends the stop view past `eta.js`'s `MAX_STOPS_AWAY` cap using only the live
+feed, and needs no schedule data at all.
 
 ### The bus detail view (`js/ui-detail.js`)
 
@@ -476,6 +448,15 @@ more bugs. Recorded here because each one encodes a lesson worth not relearning:
   distance forever rather than ever getting a learned time. Narrow (one pattern)
   and degrades honestly (worse estimate, not a wrong one), so left as recorded
   debt rather than fixed under time pressure.
+
+**Note on the four bullets above referencing `runningWithoutGps()`,
+`wallClockMinutes`/`wallClockInstant`, and `dayStamp`**: all describe real bugs
+fixed in the tripUpdates-based design that the "per-stop timetable" section
+above replaced. None of that code exists any more — the per-stop endpoint gives
+absolute times directly, so there is no elapsed-time arithmetic left to have a
+DST bug, and no whole-network snapshot left to outlive a service day. Left here
+rather than deleted, per this file's own convention of keeping a fix's account
+even after the code it fixed is gone.
 
 ## Verification
 

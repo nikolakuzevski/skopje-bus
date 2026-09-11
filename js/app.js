@@ -255,8 +255,6 @@
     function bootNetwork() {
       Promise.all([SB.history.load(), SB.debug.load()])
         .then(function () { return SB.net.ensure(); })
-        // Today's timetable, from cache only. Never a 12 MB download on boot.
-        .then(function () { return SB.timetable.ensure(Date.now(), { cachedOnly: true }); })
         .then(function () {
           // A screen exists from here on, before any live data arrives.
           const initial = chooseInitialStop();
