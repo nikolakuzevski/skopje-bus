@@ -360,6 +360,15 @@ rather than either freezing it looking fresh or yanking it away. A scheduled
 note that there is no live position yet - it does not pretend a bus is
 somewhere it has not reported being.
 
+**Tapping the bus marker itself** answers "is it moving right now, and how
+fast" via a popup (`movementText`/`busPopupHtml`). `STOPPED_AT` (upstream's own
+stronger claim) is trusted over the raw `speed` figure when both are present;
+`speed` below 0.6 m/s reads as stationary rather than "moving" on GPS jitter
+near a red light; a missing `speed` says so ("непозната брзина") rather than
+guessing. The popup's content is rebuilt fresh on every click from whatever
+`lastRow` currently is, not baked in when the marker was created, since speed
+and status change every poll while the marker object itself is reused.
+
 ### The header icons and the favourite heart
 
 **Third revision.** Инфо moved from a bottom tab to a small gear icon in the

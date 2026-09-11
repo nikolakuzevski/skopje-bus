@@ -128,10 +128,41 @@
 
   /* ---------------- the single bus + stop markers ---------------- */
 
+  /* What tapping the bus marker itself answers: is it moving right now, and
+   * how fast. `speed` is upstream's own reported figure (m/s) - shown, not
+   * derived - and "moving" is read off it with a small dead-band rather than
+   * treating any speed above zero as motion, since a GPS fix sitting at a red
+   * light can jitter a little around zero. `STOPPED_AT` is upstream's own
+   * stronger claim ("this bus is currently at a stop") and is trusted over the
+   * speed figure when both are present, since it is the more specific signal. */
+  function movementText(a) {
+    if (a.stopStatus === 'STOPPED_AT') return 'запрен на постојка';
+    if (typeof a.speed !== 'number') return 'непозната брзина';
+    if (a.speed < 0.6) return 'стои (0 км/ч)';
+    return 'во движење · ' + Math.round(a.speed * 3.6) + ' км/ч';
+  }
+
+  function busPopupHtml(a, now) {
+    const age = a.ageSec != null ? SB.dom.fmtAge(a.ageSec) : 'непозната';
+    const lines = [
+      'Линија ' + a.routeName + (a.headsign ? ' · ' + a.headsign : ''),
+      movementText(a),
+      'Позиција од пред ' + age
+    ];
+    return lines.map(function (t) { return '<div>' + t.replace(/[<>&]/g, '') + '</div>'; }).join('');
+  }
+
   function paintBusMarker(L, a, now) {
     if (!busMarker) {
       busMarker = L.marker([a.lat, a.lon], { icon: busIcon(L, a.heading, a.speed), keyboard: false });
       busMarker.addTo(map);
+      busMarker.bindPopup('');
+      // Content is built fresh on each click, from whatever `lastRow` is at
+      // that moment, not baked in at marker creation - speed and status keep
+      // changing every poll while the marker itself is reused.
+      busMarker.on('click', function () {
+        if (lastRow) busMarker.setPopupContent(busPopupHtml(lastRow, Date.now()));
+      });
       tween = null;
     } else {
       const cur = busMarker.getLatLng();
