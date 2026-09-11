@@ -37,9 +37,12 @@ time this list will be short or empty, and that is the real data talking, not
 a broken feature. It never mixes in already-departed buses just to look fuller
 — those get counted separately, honestly, on the Information tab instead.
 
-**A map.** Watch the buses move across Skopje, with line numbers and which way
-each one is pointing. Buses serving your stop are highlighted. Positions are
-roughly half a minute old and the map says so rather than pretending otherwise.
+**Tap a bus to watch just that one.** No standing map of every bus in the
+city — tap any row and it opens full screen: minutes to arrival, how many
+seconds ago its position last updated, a refresh button, and a small map with
+that bus and your stop on it. Positions are roughly half a minute old and the
+screen says so. Close it and it's gone; nothing keeps watching in the
+background.
 
 **It learns your routes.** While open, it times how long buses actually take
 between stops and uses that instead of a generic estimate. This gets better the

@@ -46,10 +46,10 @@ body {
 
 .topbar-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 0;
+  padding: 10px 0;
 }
 
 .brand {
@@ -59,12 +59,30 @@ body {
   letter-spacing: 0.02em;
 }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .status {
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* The gear icon that opens Информации - a settings-shaped screen belongs in
+   the corner, not competing with Постојка/Најди for bottom-tab space. */
+.settings-btn {
+  width: 30px;
+  height: 30px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+.settings-btn:active { background: var(--surface-2); }
+.settings-btn[aria-pressed="true"] { color: var(--accent); }
 
 .status.live::before {
   content: "";
@@ -118,6 +136,10 @@ body {
   flex-wrap: wrap;
 }
 
+/* The favourite heart sits right after the stop name/meta, not in a row of
+   its own - there is only one action here now. */
+.stop-head .heart-btn { margin-top: 12px; }
+
 /* ---------- buttons: rectangular, never pill-shaped ---------- */
 
 .btn {
@@ -137,6 +159,33 @@ body {
 .btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .btn-danger { border-color: rgba(217, 89, 76, 0.6); color: #f0a49b; }
 
+/* A small square button carrying only an icon - the refresh icons, the
+   favourite heart, the settings gear, the detail view's back arrow. */
+.icon-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+.icon-btn:active { background: var(--line); }
+.icon-btn:disabled { cursor: default; opacity: 0.7; }
+.icon-btn .icon { display: flex; }
+
+.heart-btn.is-favourite,
+.heart-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+/* Outline by default, solid once favourited - one path, opacity does the rest. */
+.heart-btn .icon svg { fill-opacity: 0; }
+.heart-btn.is-favourite .icon svg,
+.heart-btn[aria-pressed="true"] .icon svg { fill-opacity: 1; }
+
 /* ---------- arrivals ---------- */
 
 .arrivals {
@@ -152,30 +201,16 @@ body {
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
-}
-
-.row-refresh {
-  appearance: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  color: var(--muted);
   cursor: pointer;
 }
 
-.row-refresh:active { background: var(--line); }
-.row-refresh:disabled { cursor: default; opacity: 0.7; }
+.arrival:active { background: var(--surface); }
+.arrival:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-.row-refresh .refresh-icon { display: flex; }
-
-.row-refresh.is-spinning { color: var(--accent); border-color: var(--accent); }
-.row-refresh.is-spinning .refresh-icon svg { animation: sb-spin 0.9s linear infinite; }
+.row-refresh.is-spinning,
+.icon-btn.is-spinning { color: var(--accent); border-color: var(--accent); }
+.row-refresh.is-spinning .refresh-icon svg,
+.icon-btn.is-spinning .refresh-icon svg { animation: sb-spin 0.9s linear infinite; }
 
 @keyframes sb-spin {
   from { transform: rotate(0deg); }
@@ -254,18 +289,75 @@ body {
 .arrival.is-predicted .time-sub { color: var(--warn); }
 .arrival.is-predicted .route-badge { border-style: dashed; }
 
-/* ---------- map ---------- */
+/* ---------- bus detail (full screen, one bus) ---------- */
 
-/* `!important` is load-bearing: app.js toggles `panel.hidden`, and the UA
-   stylesheet's [hidden]{display:none} loses to an author `display:flex`.
-   Without it the map panel renders on every tab. */
-#panel-map { display: flex; flex-direction: column; }
-#panel-map[hidden] { display: none !important; }
+/* `!important` is load-bearing: app.js toggles `panel.hidden` for the tabbed
+   panels, but this overlay is shown/hidden directly by js/ui-detail.js the
+   same way - the UA stylesheet's [hidden]{display:none} loses to an author
+   `display:flex` otherwise, and the overlay would render behind everything. */
+#panel-detail {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+#panel-detail[hidden] { display: none !important; }
 
-#map {
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detail-headsign {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-body {
+  flex: 0 0 auto;
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detail-time {
+  display: block;
+  font-size: 38px;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.detail-age {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.detail-actions { display: flex; gap: 8px; margin-top: 14px; }
+.detail-actions .row-refresh { width: auto; padding: 0 14px; gap: 8px; }
+
+#detail-map {
   flex: 1 1 auto;
   min-height: 0;
-  height: calc(100dvh - var(--tabbar-h) - 150px);
   background: var(--surface);
 }
 
@@ -273,11 +365,6 @@ body {
   background: var(--surface);
   font: inherit;
 }
-
-.map-head { padding: 12px 16px; border-bottom: 1px solid var(--line); }
-.map-line { font-size: 14px; font-variant-numeric: tabular-nums; }
-.map-note { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
-.map-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
 .bus-pin {
   display: flex;
@@ -295,7 +382,6 @@ body {
   position: relative;
 }
 
-.bus-pin.is-here { border-color: var(--accent); color: var(--accent); }
 .bus-pin.is-stale { opacity: 0.62; border-color: var(--warn); }
 
 .bus-num { pointer-events: none; }
@@ -408,7 +494,7 @@ body {
   bottom: 0;
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   background: var(--surface);
   border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -420,7 +506,7 @@ body {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   height: var(--tabbar-h);
   cursor: pointer;
 }
@@ -479,5 +565,6 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   #toast { transition: none; }
-  .row-refresh.is-spinning .refresh-icon svg { animation: none; }
+  .row-refresh.is-spinning .refresh-icon svg,
+  .icon-btn.is-spinning .refresh-icon svg { animation: none; }
 }

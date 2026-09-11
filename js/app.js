@@ -10,6 +10,12 @@
   const MAX_BACKOFF = 8;          // 15s * 8 = two minutes between retries
   const GEO_TIMEOUT_MS = 8000;
   const NEAREST_MAX_M = 1200;
+  // Every manual "refresh now" button (each row, and the bus detail view) ends
+  // up calling the same poll() - there is no per-vehicle endpoint - so the
+  // cooldown against bursting an undocumented API has to live here, shared
+  // across all of them, not duplicated per button.
+  const MANUAL_REFRESH_COOLDOWN_MS = 5000;
+  let lastManualRefreshAt = 0;
 
   let vehicles = [];
   let lastPollAt = 0;
@@ -92,8 +98,10 @@
 
       SB.history.observe(vehicles, now);
       SB.debug.resolve(vehicles, now);
+      // uiStop.onData also refreshes the bus detail overlay, if one is open,
+      // from the same recomputed arrivals - one call site, not a second
+      // vehicles-consuming module to keep synchronised.
       SB.uiStop.onData(vehicles, now);
-      SB.uiMap.onData(vehicles, now);
       paintStatus(now);
       scheduleNext();
       // Lets a manual per-row refresh know its data has landed, whichever
@@ -114,6 +122,18 @@
       scheduleNext();
       window.dispatchEvent(new CustomEvent('sb:poll-settled'));
     });
+  }
+
+  /**
+   * A user-initiated "refresh now" - a row's button, or the bus detail view's.
+   * Returns false (and triggers nothing) if one already happened too recently.
+   */
+  function requestManualRefresh() {
+    const now = Date.now();
+    if (now - lastManualRefreshAt < MANUAL_REFRESH_COOLDOWN_MS) return false;
+    lastManualRefreshAt = now;
+    poll();
+    return true;
   }
 
   /** Poll now only if the backoff window since the last attempt has passed. */
@@ -161,13 +181,13 @@
 
   const TABS = {
     stop: { panel: '#panel-stop', btn: '#tab-stop', mount: function () { SB.uiStop.render(); } },
-    map: {
-      panel: '#panel-map', btn: '#tab-map',
-      mount: function () { SB.uiMap.mount(); },
-      unmount: function () { SB.uiMap.unmount(); }
-    },
     pick: { panel: '#panel-pick', btn: '#tab-pick', mount: function () { SB.uiPick.mount(); } },
-    info: { panel: '#panel-info', btn: '#tab-info', mount: function () { SB.uiInfo.mount(); } }
+    // Not a bottom tab - #btn-settings lives in the header as a small gear
+    // icon (Инфо is a settings-shaped screen, not a place you go often), but
+    // it is still wired through the exact same TABS machinery: showTab('info')
+    // hides/shows the right panel and sets aria-pressed on whichever button
+    // points at it, with no special-casing needed.
+    info: { panel: '#panel-info', btn: '#btn-settings', mount: function () { SB.uiInfo.mount(); } }
   };
 
   function showTab(name) {
@@ -207,6 +227,8 @@
       const btn = SB.dom.qs(TABS[k].btn);
       if (btn) btn.addEventListener('click', function () { showTab(k); });
     });
+    const gearBtn = SB.dom.qs('#btn-settings');
+    if (gearBtn) gearBtn.appendChild(SB.dom.icon('settings'));
 
     paintStatus(Date.now());
     tickTimer = setInterval(tick, 1000);
@@ -267,7 +289,6 @@
 
     window.addEventListener('sb:network', function () {
       if (activeTab === 'stop') SB.uiStop.render();
-      if (activeTab === 'map') SB.uiMap.render();
       if (activeTab === 'pick') SB.uiPick.render();
     });
 
@@ -282,6 +303,7 @@
     showTab: showTab,
     locate: locate,
     pollNow: poll,
+    requestManualRefresh: requestManualRefresh,
     lastPosition: function () { return lastPosition; },
     lastVehicles: function () { return vehicles; },
     /** Time since the last SUCCESSFUL poll, or null before the first one. */

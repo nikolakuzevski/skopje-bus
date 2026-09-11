@@ -37,6 +37,29 @@
   function qs(sel, root) { return (root || document).querySelector(sel); }
   function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); return node; }
 
+  /* One place for every small icon used as a button, rather than the same SVG
+   * string duplicated across ui-stop.js/ui-detail.js/index.html. currentColor
+   * throughout so CSS controls the actual colour per button state. */
+  const ICONS = {
+    refresh: '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">' +
+      '<path fill="currentColor" d="M8 2.5a5.5 5.5 0 1 0 5.163 3.6.75.75 0 0 1 1.406-.53A7 7 0 1 1 8 1v-.9a.35.35 0 0 1 .57-.27l2.4 1.9a.35.35 0 0 1 0 .55l-2.4 1.9A.35.35 0 0 1 8 3.9V2.5Z"/></svg>',
+    heart: '<svg viewBox="0 0 20 18" width="19" height="17" aria-hidden="true">' +
+      '<path fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" ' +
+      'd="M10 17.3 2.6 10.2C.6 8.3.6 5.2 2.6 3.4c1.9-1.7 4.8-1.5 6.5.4L10 4.9l.9-1.1c1.7-1.9 4.6-2.1 6.5-.4 2 1.8 2 4.9 0 6.8L10 17.3Z"/></svg>',
+    back: '<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">' +
+      '<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
+      'd="M12.5 4.5 6 10l6.5 5.5"/></svg>',
+    settings: '<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">' +
+      '<line x1="3" y1="5" x2="17" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
+      '<line x1="3" y1="10" x2="17" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
+      '<line x1="3" y1="15" x2="17" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
+      '<circle cx="8" cy="5" r="2.2" fill="currentColor"/><circle cx="13" cy="10" r="2.2" fill="currentColor"/>' +
+      '<circle cx="9" cy="15" r="2.2" fill="currentColor"/></svg>'
+  };
+  function icon(name, extraClass) {
+    return el('span', { class: 'icon' + (extraClass ? ' ' + extraClass : ''), html: ICONS[name] || '' });
+  }
+
   let toastTimer = null;
   function toast(message, isError) {
     const box = qs('#toast');
@@ -113,7 +136,7 @@
   }
 
   SB.dom = {
-    el: el, qs: qs, clear: clear, toast: toast, confirm: confirmBox,
+    el: el, qs: qs, clear: clear, toast: toast, confirm: confirmBox, icon: icon,
     haversine: haversine,
     fmtMinutes: fmtMinutes, fmtClock: fmtClock, fmtAge: fmtAge, fmtDistance: fmtDistance
   };

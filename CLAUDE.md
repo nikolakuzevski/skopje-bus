@@ -72,7 +72,7 @@ Two upstream quirks worth knowing before trusting a field:
 ## Architecture
 
 ```
-js/dom.js        el() helper, in-app confirm, haversine, Macedonian formatting
+js/dom.js        el() helper, icon() svg builder, in-app confirm, haversine, Macedonian formatting
 js/api.js        the ONLY file that knows Modeshift; normalises at the boundary
 js/cache.js      IndexedDB kv + the routes/stops snapshot and its lookup indexes
 js/store.js      the ONLY file that touches localStorage (preferences only)
@@ -80,9 +80,13 @@ js/history.js    learned stop-to-stop travel times
 js/eta.js        the prediction engine for buses with live GPS
 js/timetable.js  the daily timetable: hour-ahead rows and buses with no GPS
 js/debug.js      predicted-vs-actual accuracy measurement
-js/ui-*.js       the four tabs (stop, map, pick, info)
+js/ui-stop.js    the main screen: one stop, every bus coming to it
+js/ui-detail.js  full-screen view of ONE tapped bus, with its own small map
+js/ui-pick.js    stop search
+js/ui-info.js    settings + accuracy figures, opened from the header gear icon
 js/app.js        boot, poll loop, tabs, the one-second clock
-vendor/leaflet/  Leaflet 1.9.4 (MIT), vendored deliberately - see The map below
+vendor/leaflet/  Leaflet 1.9.4 (MIT), vendored deliberately - see the bus detail
+                 view below
 ```
 
 ### Why the app feels fast
@@ -297,42 +301,106 @@ only the departure time, which is the one thing upstream actually states. A row
 whose central estimate is already in the past shows `до N мин`, never a clamped
 `1-N мин`, which would claim the bus is still at least a minute away.
 
-### The map (`js/ui-map.js`)
+### The bus detail view (`js/ui-detail.js`)
 
-A **subscriber, never a fetcher**: `app.js` hands it each poll's vehicles. It
-owns no timers and makes no API calls; giving it its own poll would double load
-on an undocumented API for no new information.
+**Third revision: replaces the old always-on "every bus in Skopje" map tab.**
+That tab showed 100+ markers at once, most of which nobody was looking for, and
+had no way to leave it except the bottom tab bar — which itself came back as a
+complaint ("no button to close the map"). Both problems share one fix: there is
+no longer a standing map screen at all. Tapping any arrival row opens a
+full-screen view of **exactly that one bus**, with its own small map, and the
+only way onto that screen is a tap - so the back arrow at its top is the only
+way anyone needs to leave it. `js/ui-map.js` is deleted; nothing else replaced
+its "watch every bus" job, because the user explicitly asked for the opposite
+of that ("не мора сите автобуси да се покажуваат во целото време - туку само
+тој кој јас сум го кликнал").
 
-Leaflet is **vendored** in `vendor/leaflet/`, not loaded from a CDN, because
-`sw.js` deliberately ignores cross-origin GETs — a CDN copy could never be
-precached and the map would be dead offline. It is injected lazily on first
-`mount()` so a user who never opens the tab pays nothing at boot.
+**Identity across polls.** `arrivals` is a brand-new array every poll (built in
+`ui-stop.js`), so this module cannot hold onto the row object it was opened
+with - it holds onto `tripId` instead (present on every row, live, far or
+scheduled) and re-finds the freshest matching row out of whatever `update()`
+is handed each time, called from the tail of `ui-stop.js`'s `onData()`
+unconditionally (it no-ops in one line if closed). That re-find is also what
+lets a row quietly turn from "predicted, no GPS yet" into a live one without
+this screen needing to know or care which kind it started as - it is simply
+whatever `js/eta.js`/`js/timetable.js` currently say about that `tripId`.
 
-Three details that will be got wrong if changed carelessly:
+**The map is a singleton**, unlike the old tab's mount/unmount cycle: created
+once on first `open()` and reused for every later one (`setView` + swap
+markers), never destroyed. There is exactly one place this screen can be
+shown, so the double-init class of bug the old tab had to guard against
+(`mounting` flag, tapping away and back while Leaflet was still loading)
+cannot occur here by construction.
+
+Leaflet is still **vendored** in `vendor/leaflet/`, not loaded from a CDN,
+because `sw.js` deliberately ignores cross-origin GETs — a CDN copy could
+never be precached and the map would be dead offline. Still injected lazily on
+first open so a user who never taps a row pays nothing at boot. The two
+carried-over details that will be got wrong if changed carelessly:
 
 - **Rotation must live on an inner span.** Leaflet rewrites `transform` on the
   marker's root element on every `setLatLng`, pan and zoom, so a heading applied
   to the root is silently erased each poll. `.bus-pin` is the root Leaflet owns;
   `.bus-arrow` is ours.
-- **`#panel-map[hidden]` needs `display:none !important`.** `app.js` toggles
-  `panel.hidden`, and the UA stylesheet's `[hidden]{display:none}` loses to an
-  author `display:flex`. Without it the map renders on every tab.
-- **A ResizeObserver on the container is required**, not a one-shot
-  `invalidateSize()`. Leaflet caches its pixel size at init and loads tiles only
-  for that rectangle; a map created while its panel is hidden, or a device
-  rotation afterwards, leaves it loading a single tile into an empty view. This
-  was observed, not theorised.
+- **`#panel-detail[hidden]` needs `display:none !important`.** Toggled directly
+  by `ui-detail.js`, not through the `TABS` system, but the same UA-stylesheet-
+  loses-to-author-`display:flex` problem applies. Without it the overlay covers
+  the app permanently.
 
-Honesty rules specific to this view: markers tween 1.2s between two genuinely
-reported positions and then stop — dead-reckoning along `heading` and `speed`
-would be drawing a position nobody reported. A vehicle with null heading (or
-near-zero speed) gets a plain dot, because a north-pointing arrow on a bus of
-unknown heading is an invented fact. Buses with no GPS cannot be drawn at all;
-the header states how many are missing only when a fresh timetable download
-makes that count knowable (`SB.timetable.runningWithoutGps`) — the `/vehicles`
-feed alone can never answer it, since it by construction contains only buses
-that ARE reporting a position, so comparing its length to the drawn count
-always reads close to zero and is not the same fact.
+Honesty rules, carried over and extended for the single-bus case: the marker
+tweens 1.2s between two genuinely reported positions and then stops -
+dead-reckoning along `heading`/`speed` would be drawing a position nobody
+reported. Null heading (or near-zero speed) gets a plain dot, not an invented
+north-pointing arrow. **A bus whose `tripId` drops out of the merged arrivals
+entirely (arrived, passed the stop, or lost GPS) does not vanish silently** -
+the screen says so explicitly ("веројатно ја помина постојката или изгуби ГПС
+сигнал") and leaves its last-known marker on the map, restyled `.is-stale`,
+rather than either freezing it looking fresh or yanking it away. A scheduled
+(not-yet-departed) row's tap works too, showing only the stop marker with a
+note that there is no live position yet - it does not pretend a bus is
+somewhere it has not reported being.
+
+### The header icons and the favourite heart
+
+**Third revision.** Инфо moved from a bottom tab to a small gear icon in the
+header's top-right corner (`#btn-settings`) - it is still wired through the
+exact same `TABS` machinery in `app.js` as before (`TABS.info.btn` just points
+at the new element), so `showTab('info')`, the panel hide/show, and the
+`aria-pressed` highlighting all work unchanged with zero special-casing. The
+bottom tab bar is down to two: Постојка, Најди.
+
+"Зачувај" and "Постави како почетна" (two buttons) became one heart icon
+(`.heart-btn`, toggles `SB.store.toggleFavourite`). The separate "pin as home
+stop" concept has no UI any more - `chooseInitialStop()` in `app.js` already
+fell back to the first favourite when nothing was pinned, so favouriting a stop
+is sufficient to make it the one that opens first; `store.js`'s
+`pinnedStopId`/`setPinnedStop` are left in place (harmless, still read on boot)
+rather than ripped out, since removing a working fallback path is not what was
+asked for.
+
+### Manual refresh, centralised
+
+Every arrival row, and the bus detail view, carries its own refresh icon. There
+is no per-vehicle endpoint - `/vehicles` is the whole feed or nothing - so
+every tap, wherever it is pressed, ends up calling the exact same `poll()`.
+The cooldown against turning enthusiastic tapping into a burst of requests
+against an undocumented API therefore lives in **one place**,
+`SB.app.requestManualRefresh()` in `app.js` (a 5s shared window), rather than
+being duplicated per button; both `ui-stop.js`'s row buttons and
+`ui-detail.js`'s button are thin callers that show a spin state and a
+"Веќе е освежено пред кратко." toast on the `false` return. Each button also
+carries its own 10s spin-timeout backstop, independent of the others, so a
+missed `sb:poll-settled` event can never leave one specific button stuck
+spinning forever.
+
+One related fix worth noting: a row's tap target used to close over the
+arrival object from whenever the row was last *built* (`buildRow`), not last
+*painted* - since `paintRow` updates the visible text every poll without
+rebuilding the row when its key is unchanged, a row sitting still for several
+polls would open the detail view (or, before that concept existed, would have
+used) data up to several poll cycles stale. `paintRow` now refreshes
+`rows.get(key).data` on every call, so a tap always reads what is currently on
+screen.
 
 ## Second audit pass (2026-09-09)
 
@@ -414,6 +482,34 @@ There is no fixture for a live third-party feed, so verification is empirical.
 - Offline: the shell must load from cache and show an explicit stale state, never
   a blank screen. Live data is deliberately never cached — a ten-minute-old bus
   position is worse than none.
+- **`sw.js`'s install handler fetches ASSETS one at a time (`ASSETS.reduce`
+  chaining a promise), not `cache.addAll()` and not `Promise.all()`.** This was
+  forced by a real, reproducible finding, not a style choice: in the automated
+  browser tool used to verify this app, firing all ~25 precache requests from
+  inside the service worker at once (either via `addAll()` or `Promise.all()` +
+  `fetch()`/`cache.put()`) consistently left a stable subset of the list (not
+  random - the same later entries every time) never persisted, *while the
+  service worker registration still reported `active.state === 'activated'`* -
+  which per spec should only be reachable once `install`'s `event.waitUntil`
+  promise has resolved, i.e. once every asset supposedly finished. The identical
+  fetches, issued from the PAGE instead of the service worker, succeeded
+  instantly and completely (25/25) every single time, ruling out the dev server
+  or the asset list. Going strictly one fetch at a time sidesteps whatever this
+  is; for 25 small files the serial cost is negligible either way. **This
+  specific check could not be made to pass reliably inside that automated
+  tool even with the safest possible code** - `active.state === 'activated'`
+  was observed with the cache anywhere from 0 to 25 of 25 items actually
+  present, non-deterministically, across otherwise-identical runs. The app's
+  normal (online) behaviour was confirmed unaffected either way - the `fetch`
+  handler's cache-miss path falls through to the network correctly regardless
+  of what precached. **Do not trust that automated tool's read of `caches.keys()`
+  after a `register()` call as proof of a service-worker regression** - verify
+  precaching by hand in a real browser's DevTools → Application → Cache Storage
+  instead, which is also the only way to see errors thrown inside the worker's
+  own execution context (its `console.log` does not reach the page's console,
+  and `postMessage`/`MessageChannel` replies from the worker were also observed
+  to never arrive back in that same automated tool, confirmed with a trivial
+  throwaway test worker that did nothing but echo one message).
 
 ## Design rules
 

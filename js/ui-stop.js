@@ -15,29 +15,19 @@
 
   /* A manual refresh on one row still refetches the whole feed - the API has
    * no way to ask for a single vehicle - so every row visibly updates from a
-   * single tap, not just the one pressed. A short shared cooldown stops a
-   * curious double-tap (or several rows tapped in a row) from turning into a
-   * burst of requests against an undocumented API; REFRESH_TIMEOUT_MS is a
-   * backstop so a button can never spin forever if a poll's settle event is
-   * somehow missed (a hidden tab, a poll already in flight and swallowed). */
-  const REFRESH_COOLDOWN_MS = 5000;
+   * single tap, not just the one pressed. The cooldown against bursting an
+   * undocumented API lives in js/app.js (SB.app.requestManualRefresh), shared
+   * with the bus detail view's own refresh button, since they all end up
+   * calling the same poll(). REFRESH_TIMEOUT_MS is a local backstop so a
+   * button can never spin forever if a poll's settle event is somehow missed
+   * (a hidden tab, a poll already in flight and swallowed). */
   const REFRESH_TIMEOUT_MS = 10000;
 
   let stopId = null;
   let arrivals = [];
   let signature = '';
-  const rows = new Map(); // key -> {li, timeText, timeSub, sub, refreshBtn}
-  let lastManualRefreshAt = 0;
+  const rows = new Map(); // key -> {li, timeText, timeSub, sub, refreshBtn, data}
   const refreshing = new Set(); // row keys currently showing the spin state
-
-  function refreshIcon() {
-    return el('span', {
-      class: 'refresh-icon',
-      html: '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">' +
-        '<path fill="currentColor" d="M8 2.5a5.5 5.5 0 1 0 5.163 3.6.75.75 0 0 1 1.406-.53A7 7 0 1 1 8 1v-.9a.35.35 0 0 1 .57-.27l2.4 1.9a.35.35 0 0 1 0 .55l-2.4 1.9A.35.35 0 0 1 8 3.9V2.5Z"/>' +
-        '</svg>'
-    });
-  }
 
   function stopSpinning(key) {
     refreshing.delete(key);
@@ -110,37 +100,29 @@
     if (pos) bits.push(SB.dom.fmtDistance(SB.dom.haversine(pos.lat, pos.lon, stop.lat, stop.lon)));
     host.appendChild(el('p', { class: 'stop-meta', text: bits.join(' · ') }));
 
+    // A single heart replaces the old "Зачувај" + "Постави како почетна" pair.
+    // The app still opens to a pinned stop if one was set by older data, but
+    // there is no UI to set one any more - chooseInitialStop() in app.js
+    // already falls back to the first favourite, so favouriting a stop is
+    // enough to make it the one that opens first.
     const isFav = SB.store.isFavourite(stop.id);
-    const isPinned = SB.store.pinnedStopId() === stop.id;
-    host.appendChild(el('div', { class: 'stop-actions' }, [
-      el('button', {
-        class: 'btn', type: 'button', 'aria-pressed': String(isFav),
-        onclick: function () {
-          SB.store.toggleFavourite(stop.id);
-          renderHead();
-          SB.dom.toast(SB.store.isFavourite(stop.id) ? 'Зачувано' : 'Отстрането');
-        }
-      }, isFav ? 'Зачувана' : 'Зачувај'),
-      el('button', {
-        class: 'btn', type: 'button', 'aria-pressed': String(isPinned),
-        onclick: function () {
-          SB.store.setPinnedStop(isPinned ? null : stop.id);
-          renderHead();
-          SB.dom.toast(isPinned ? 'Веќе не се отвора прва' : 'Оваа постојка се отвора прва');
-        }
-      }, isPinned ? 'Почетна' : 'Постави како почетна')
-    ]));
+    host.appendChild(el('button', {
+      class: 'icon-btn heart-btn', type: 'button',
+      'aria-label': isFav ? 'Отстрани од омилени' : 'Додај во омилени',
+      'aria-pressed': String(isFav),
+      onclick: function () {
+        const now = SB.store.toggleFavourite(stop.id);
+        renderHead();
+        SB.dom.toast(now ? 'Додадено во омилени' : 'Отстрането од омилени');
+      }
+    }, [SB.dom.icon('heart', 'heart-icon')]));
   }
 
   function requestRefresh(rowKey) {
-    const now = Date.now();
-    // Refreshing refetches the whole feed - there is no per-vehicle endpoint -
-    // so this cooldown is shared across every row's button, not per-button.
-    if (now - lastManualRefreshAt < REFRESH_COOLDOWN_MS) {
+    if (!SB.app.requestManualRefresh()) {
       SB.dom.toast('Веќе е освежено пред кратко.');
       return;
     }
-    lastManualRefreshAt = now;
     refreshing.add(rowKey);
     const r = rows.get(rowKey);
     if (r && r.refreshBtn) {
@@ -150,7 +132,11 @@
     setTimeout(function () {
       if (refreshing.has(rowKey)) stopSpinning(rowKey);
     }, REFRESH_TIMEOUT_MS);
-    if (SB.app) SB.app.pollNow();
+  }
+
+  function openDetail(rowKey) {
+    const r = rows.get(rowKey);
+    if (r && r.data && SB.uiDetail) SB.uiDetail.open(r.data);
   }
 
   function buildRow(a) {
@@ -159,10 +145,19 @@
     const timeSub = el('span', { class: 'time-sub' });
     const sub = el('span', { class: 'arrival-sub' });
     const refreshBtn = el('button', {
-      class: 'row-refresh', type: 'button', 'aria-label': 'Освежи сега',
+      class: 'icon-btn row-refresh', type: 'button', 'aria-label': 'Освежи сега',
       onclick: function (e) { e.stopPropagation(); requestRefresh(rowKey); }
-    }, [refreshIcon()]);
-    const li = el('li', { class: 'arrival', dataset: { key: rowKey } }, [
+    }, [SB.dom.icon('refresh', 'refresh-icon')]);
+    const li = el('li', {
+      class: 'arrival', dataset: { key: rowKey },
+      role: 'button', tabindex: '0',
+      onclick: function () { openDetail(rowKey); },
+      onkeydown: function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        openDetail(rowKey);
+      }
+    }, [
       el('span', { class: 'route-badge', text: a.routeName }),
       el('span', { class: 'arrival-main' }, [
         el('span', { class: 'headsign', text: a.headsign || SB.net.routeName(a.routeId) }),
@@ -171,7 +166,7 @@
       el('span', { class: 'arrival-time' }, [timeText, timeSub]),
       refreshBtn
     ]);
-    rows.set(rowKey, { li: li, timeText: timeText, timeSub: timeSub, sub: sub, refreshBtn: refreshBtn });
+    rows.set(rowKey, { li: li, timeText: timeText, timeSub: timeSub, sub: sub, refreshBtn: refreshBtn, data: a });
     return li;
   }
 
@@ -183,6 +178,11 @@
   function paintRow(a, now, feedAgeMs) {
     const r = rows.get(key(a));
     if (!r) return;
+    // Keeps a tap on this row (or the detail view's own refresh) working from
+    // THIS poll's object, not whichever one was current when the row was
+    // first built - the row can sit at the same key across many polls while
+    // only its text gets repainted here.
+    r.data = a;
 
     const feedDown = feedAgeMs != null && feedAgeMs > FEED_STALE_MS;
     let lbl;
@@ -292,6 +292,8 @@
       // by deliberately wide far or schedule ranges.
       SB.debug.recordPredictions(stopId, live, now);
       renderList(now);
+      // No-ops instantly if nothing is open - see js/ui-detail.js.
+      if (SB.uiDetail) SB.uiDetail.update(arrivals, now);
     },
 
     /** Called once per second. Only touches text. */

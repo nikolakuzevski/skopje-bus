@@ -6,7 +6,7 @@
  *
  * ASSETS must mirror the script list in index.html. Bump CACHE_VERSION whenever
  * any cached file changes, or an installed PWA keeps serving the old one. */
-const CACHE_VERSION = 'sb-v5';
+const CACHE_VERSION = 'sb-v8';
 const ASSETS = [
   './',
   'index.html',
@@ -21,7 +21,7 @@ const ASSETS = [
   'js/debug.js',
   'js/timetable.js',
   'js/ui-stop.js',
-  'js/ui-map.js',
+  'js/ui-detail.js',
   'js/ui-pick.js',
   'js/ui-info.js',
   'js/app.js',
@@ -42,13 +42,24 @@ self.addEventListener('install', function (event) {
   event.waitUntil(
     caches.open(CACHE_VERSION)
       .then(function (cache) {
-        // Plain URL strings let cache.addAll's fetches be answered from the
-        // browser's own HTTP cache. A CACHE_VERSION bump made within a static
-        // asset's max-age window could then precache the OLD bytes under the
-        // NEW cache name - {cache:'reload'} forces each one past that.
-        return cache.addAll(ASSETS.map(function (u) {
-          return new Request(u, { cache: 'reload' });
-        }));
+        // One fetch at a time, not cache.addAll() or Promise.all(): firing all
+        // ~25 requests from inside the service worker at once was observed,
+        // repeatedly and reproducibly, to leave a consistent tail of the list
+        // (always the same later entries) never cached, while the identical
+        // fetches all succeed instantly when issued from a page instead -
+        // some concurrency limit specific to SW-initiated fetch() in at least
+        // one real environment. Going one at a time sidesteps the whole class
+        // of problem; 25 small files cost nothing serially. {cache:'reload'}
+        // still forces each fetch past the HTTP cache, so a CACHE_VERSION
+        // bump within a static asset's max-age window cannot precache the OLD
+        // bytes under the NEW cache name.
+        return ASSETS.reduce(function (chain, u) {
+          return chain.then(function () {
+            return fetch(new Request(u, { cache: 'reload' })).then(function (res) {
+              if (res && res.ok) return cache.put(u, res);
+            });
+          });
+        }, Promise.resolve());
       })
       .then(function () { return self.skipWaiting(); })
   );
