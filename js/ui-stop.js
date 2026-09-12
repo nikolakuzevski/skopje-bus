@@ -90,6 +90,7 @@
   }
 
   function renderHead() {
+    renderFavourites();
     const host = SB.dom.qs('#stop-head');
     if (!host) return;
     SB.dom.clear(host);
@@ -128,6 +129,32 @@
         SB.dom.toast(now ? 'Додадено во омилени' : 'Отстрането од омилени');
       }
     }, [SB.dom.icon('heart', 'heart-icon')]));
+  }
+
+  /* The only place favourited stops are selectable from without going through
+   * search first - the user asked for exactly this after favouriting a stop
+   * left no visible way back to it except retyping its name. Rebuilt on every
+   * renderHead() call (stop change, favourite toggle, tab mount), which is
+   * cheap enough at a handful of favourites that no separate dirty-tracking
+   * is worth it. */
+  function renderFavourites() {
+    const host = SB.dom.qs('#fav-strip');
+    if (!host) return;
+    const favs = SB.store.favourites()
+      .map(function (id) { return SB.net.stopById.get(id); })
+      .filter(Boolean);
+    SB.dom.clear(host);
+    if (!favs.length) { host.hidden = true; return; }
+    host.hidden = false;
+    favs.forEach(function (s) {
+      const active = s.id === stopId;
+      host.appendChild(el('button', {
+        class: 'fav-chip' + (active ? ' is-active' : ''),
+        type: 'button',
+        'aria-pressed': String(active),
+        onclick: function () { SB.uiStop.setStop(s.id); }
+      }, s.name));
+    });
   }
 
   function requestRefresh(rowKey) {

@@ -6,7 +6,7 @@
  *
  * ASSETS must mirror the script list in index.html. Bump CACHE_VERSION whenever
  * any cached file changes, or an installed PWA keeps serving the old one. */
-const CACHE_VERSION = 'sb-v10';
+const CACHE_VERSION = 'sb-v11';
 const ASSETS = [
   './',
   'index.html',

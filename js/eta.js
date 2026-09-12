@@ -191,7 +191,15 @@
         ageSec: ageSec,
         delaySeconds: v.delaySeconds,
         lat: v.lat,
-        lon: v.lon
+        lon: v.lon,
+        // Carried through only for js/ui-detail.js's marker popup (current
+        // speed/heading/stop status) - nothing in this file reads them back.
+        // Their absence here used to leave the popup permanently reading
+        // "непозната брзина" for every live bus, never just when speed was
+        // genuinely unreported.
+        speed: v.speed,
+        heading: v.heading,
+        stopStatus: v.stopStatus
       });
     });
 
