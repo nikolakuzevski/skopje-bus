@@ -72,7 +72,7 @@
   }
 
   function stopsAwayText(a, now) {
-    if (a.scheduled) return SB.timetable.detail(a, now);
+    if (a.scheduled) return SB.timetable.detail(a);
     if (a.stopsAway === 0) return 'следна постојка';
     if (a.stopsAway === 1) return '1 постојка до тука';
     return a.stopsAway + ' постојки до тука';

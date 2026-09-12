@@ -28,7 +28,9 @@
  * still 15-20+ stops from the target): the two diverged by 5-20 minutes, which
  * is not upstream being wrong so much as both sources doing the same kind of
  * long-range extrapolation and disagreeing on it - exactly where this app's
- * OLD error curve also said not to trust a specific minute. See MARGIN below.
+ * OLD error curve also said not to trust a specific minute. This is also why
+ * a not-yet-dispatched row states the scheduled clock time rather than
+ * guessing a countdown from it - see label() below.
  *
  * Per-stop, not per-day: at ~5 KB and ~500 ms for a busy stop, fetching it
  * fresh for whichever one stop is actually on screen is simpler and more
@@ -45,19 +47,9 @@
   const HORIZON_MIN = 40;
   const REFRESH_MS = 60000;    // how long a stop's fetched entries are reused
   const PAST_GRACE_MIN = 3;    // keep a row this long after its predicted time, then drop it
-
-  /* Margin bands for the minute range shown on a NON-realtime row, in minutes
-   * either side of the predicted instant. Not independently measured - a
-   * deliberately conservative carry-over of "closer means more trustworthy,"
-   * the same shape as the old ERROR_CURVE without its specific numbers,
-   * because this is a different upstream source and claiming a measured
-   * figure for it would be the same kind of overclaim this project exists to
-   * avoid. Past MID_HORIZON_MIN, no number is shown at all - only the clock
-   * time. A `realtime` row does not use these at all - see label() below. */
-  const MARGIN_NEAR_MIN = 3;
-  const MARGIN_MID_MIN = 6;
-  const NEAR_HORIZON_MIN = 15;
-  const MID_HORIZON_MIN = 30;
+  /* Below this, a delay is not worth naming - GPS/clock jitter on an
+   * otherwise on-time bus, not a real early/late signal. */
+  const ON_TIME_SEC = 60;
 
   const cache = new Map();     // stopId -> {fetchedAt, entries}
   const inFlight = new Map();  // stopId -> Promise
@@ -135,7 +127,8 @@
         routeName: SB.net.isLoaded() ? SB.net.routeName(t.routeId) : String(t.routeId),
         headsign: t.headsign,
         predictedAt: predictedAt,
-        realtime: t.realtime
+        realtime: t.realtime,
+        delaySec: t.arrivalDelaySec
       });
     });
 
@@ -144,58 +137,59 @@
   }
 
   /**
-   * How a scheduled row reads, in Macedonian. The word the user asked for,
-   * "предвидување", is used unconditionally here - every row this module
-   * emits is schedule-derived, even the `realtime` ones (their GPS correction
-   * makes the NUMBER more trustworthy, it does not turn them into a live
-   * position the way js/eta.js's rows are). Where the margin bands above say
-   * a minute figure would not be trustworthy, only the clock time is shown.
+   * "на време" / "доцни N мин" / "порано N мин" - a direct user request, to
+   * replace a generic "предвидување" label once a trip is actually being
+   * tracked: they want to know not just how long until it arrives but
+   * whether it is running to the schedule that number is based on. Read
+   * straight off `arrivalDelay`, upstream's own GPS-measured figure, not
+   * anything this app computed itself. An implausible value falls back to
+   * the old generic label rather than printing a nonsense minute count.
+   */
+  function delayLabel(delaySec) {
+    if (typeof delaySec !== 'number' || Math.abs(delaySec) > 7200) return 'предвидување';
+    if (Math.abs(delaySec) < ON_TIME_SEC) return 'на време';
+    const mins = Math.round(Math.abs(delaySec) / 60);
+    return delaySec > 0 ? 'доцни ' + mins + ' мин' : 'порано ' + mins + ' мин';
+  }
+
+  /**
+   * How a scheduled row reads, in Macedonian.
    *
-   * `realtime` rows show a single number, rounded DOWN, never a range - a
-   * direct user request after the old centred range ("5-11 мин") led to the
-   * bus arriving at the near end while they were still going by the far one.
-   * A bus already out on the road (GPS-corrected) is the exact case they
-   * asked to be told about accurately: showing the earliest plausible minute
-   * means checking a little early at worst, never missing it because the
-   * number shown was the late end of a spread.
+   * Not yet dispatched (`realtime: false`): no live signal exists to base a
+   * minute countdown on, so - per direct user request - this states the
+   * scheduled time plainly ("во 11:00" / "се очекува") instead of guessing a
+   * range. A guessed range for a trip that has not even started was the
+   * thing being complained about, not just its width.
+   *
+   * Dispatched and GPS-tracked (`realtime: true`): a single number, rounded
+   * DOWN, never a range - an earlier user request, after a centred range
+   * ("5-11 мин") led to the bus arriving at the near end while they were
+   * still going by the far one. The small text underneath used to repeat
+   * "предвидување" unconditionally; now it says whether the bus is running
+   * on schedule, the more useful fact once it is actually moving.
    */
   function label(row, nowMs) {
     const now = nowMs || Date.now();
     const mins = (row.predictedAt - now) / 60000;
     const clockText = 'во ' + SB.dom.fmtClock(row.predictedAt);
-    const sub = 'предвидување';
 
+    if (!row.realtime) return { text: clockText, sub: 'се очекува' };
+
+    const sub = delayLabel(row.delaySec);
     if (mins <= 0) return { text: clockText, sub: sub };
-
-    if (row.realtime) {
-      const early = Math.floor(mins);
-      return { text: early <= 0 ? 'сега' : early + ' мин', sub: sub };
-    }
-
-    let margin = null;
-    if (mins <= NEAR_HORIZON_MIN) margin = MARGIN_NEAR_MIN;
-    else if (mins <= MID_HORIZON_MIN) margin = MARGIN_MID_MIN;
-    if (margin == null) return { text: clockText, sub: sub };
-
-    const lo = Math.round(mins - margin);
-    const hi = Math.round(mins + margin);
-    if (hi <= 0) return { text: clockText, sub: sub };
-    // Never clamp the low end up to 1: that would claim the bus is at least a
-    // minute away when the margin allows for it having already arrived.
-    if (lo <= 0) return { text: 'до ' + hi + ' мин', sub: sub };
-    return { text: lo + '-' + hi + ' мин', sub: sub };
+    const early = Math.floor(mins);
+    return { text: early <= 0 ? 'сега' : early + ' мин', sub: sub };
   }
 
-  /** The secondary line under a scheduled row. Only adds the clock time when
-   * the primary time column (label(), above) is not already showing it - past
-   * MID_HORIZON_MIN both would otherwise print the identical "во HH:MM" twice. */
-  function detail(row, nowMs) {
-    const now = nowMs || Date.now();
-    const mins = (row.predictedAt - now) / 60000;
-    const primaryIsClockOnly = mins <= 0 ||
-      (!row.realtime && mins > MID_HORIZON_MIN);
-    if (primaryIsClockOnly) return row.realtime ? 'GPS-коригирано' : '';
-    return 'во ' + SB.dom.fmtClock(row.predictedAt) + (row.realtime ? ' · GPS-коригирано' : '');
+  /** The secondary line under a scheduled row's headsign. Blank for a
+   * not-yet-departed trip - its one useful fact, the scheduled time, is
+   * already label()'s primary text above, and repeating it here would just
+   * be the same clock time twice. For a tracked trip, label()'s primary text
+   * is now a countdown, so this is the only place the original scheduled
+   * time the delay is measured against still appears. */
+  function detail(row) {
+    if (!row.realtime) return '';
+    return 'во ' + SB.dom.fmtClock(row.predictedAt);
   }
 
   SB.timetable = {
@@ -212,8 +206,7 @@
     refreshMs: REFRESH_MS,
     constants: {
       HORIZON_MIN: HORIZON_MIN,
-      NEAR_HORIZON_MIN: NEAR_HORIZON_MIN,
-      MID_HORIZON_MIN: MID_HORIZON_MIN
+      ON_TIME_SEC: ON_TIME_SEC
     }
   };
 })();
