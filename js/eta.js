@@ -210,7 +210,12 @@
 
   /**
    * How to render one arrival's time. Returns {text, sub} in Macedonian.
-   * Low-confidence predictions become a range rather than a false exact minute.
+   * Low-confidence predictions show the EARLIEST plausible minute, not a
+   * centred range - a direct user request: a range like "6-10 мин" got read
+   * as "I have 10 minutes" and the bus arrived at 6. This bus already has a
+   * live GPS fix, however far off it is, so undershooting is the safer wrong
+   * answer - the worst case is checking a bit early, never missing it because
+   * the number shown was the late end of a spread.
    */
   function label(arrival, nowMs) {
     const now = nowMs || Date.now();
@@ -237,13 +242,9 @@
     const mins = Math.round(sec / 60);
     if (arrival.confidence === 'low') {
       const spread = Math.max(1, Math.round(Math.abs(mins) * 0.25));
-      const lo = mins - spread;
-      const hi = mins + spread;
-      // Never clamp the low end up: that would claim the bus is at least a
-      // minute away when the estimate allows for it arriving already. Mirrors
-      // the same rule in js/timetable.js's schedule-row labels.
+      const early = mins - spread;
       return {
-        text: lo <= 0 ? 'до ' + Math.max(1, hi) + ' мин' : lo + '-' + hi + ' мин',
+        text: early <= 0 ? 'сега' : early + ' мин',
         sub: 'приближно'
       };
     }

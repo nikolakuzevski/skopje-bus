@@ -46,15 +46,14 @@
   const REFRESH_MS = 60000;    // how long a stop's fetched entries are reused
   const PAST_GRACE_MIN = 3;    // keep a row this long after its predicted time, then drop it
 
-  /* Margin bands for the minute range shown, in minutes either side of the
-   * predicted instant. `REALTIME` is backed by the cross-check above. The
-   * other two are NOT independently measured yet - they are a deliberately
-   * conservative carry-over of "closer means more trustworthy," the same
-   * shape as the old ERROR_CURVE without its specific numbers, because this
-   * is a different upstream source and claiming a measured figure for it
-   * would be the same kind of overclaim this project exists to avoid. Past
-   * MID_HORIZON_MIN, no number is shown at all - only the clock time. */
-  const MARGIN_REALTIME_MIN = 2;
+  /* Margin bands for the minute range shown on a NON-realtime row, in minutes
+   * either side of the predicted instant. Not independently measured - a
+   * deliberately conservative carry-over of "closer means more trustworthy,"
+   * the same shape as the old ERROR_CURVE without its specific numbers,
+   * because this is a different upstream source and claiming a measured
+   * figure for it would be the same kind of overclaim this project exists to
+   * avoid. Past MID_HORIZON_MIN, no number is shown at all - only the clock
+   * time. A `realtime` row does not use these at all - see label() below. */
   const MARGIN_NEAR_MIN = 3;
   const MARGIN_MID_MIN = 6;
   const NEAR_HORIZON_MIN = 15;
@@ -151,6 +150,14 @@
    * makes the NUMBER more trustworthy, it does not turn them into a live
    * position the way js/eta.js's rows are). Where the margin bands above say
    * a minute figure would not be trustworthy, only the clock time is shown.
+   *
+   * `realtime` rows show a single number, rounded DOWN, never a range - a
+   * direct user request after the old centred range ("5-11 мин") led to the
+   * bus arriving at the near end while they were still going by the far one.
+   * A bus already out on the road (GPS-corrected) is the exact case they
+   * asked to be told about accurately: showing the earliest plausible minute
+   * means checking a little early at worst, never missing it because the
+   * number shown was the late end of a spread.
    */
   function label(row, nowMs) {
     const now = nowMs || Date.now();
@@ -160,9 +167,13 @@
 
     if (mins <= 0) return { text: clockText, sub: sub };
 
+    if (row.realtime) {
+      const early = Math.floor(mins);
+      return { text: early <= 0 ? 'сега' : early + ' мин', sub: sub };
+    }
+
     let margin = null;
-    if (row.realtime) margin = MARGIN_REALTIME_MIN;
-    else if (mins <= NEAR_HORIZON_MIN) margin = MARGIN_NEAR_MIN;
+    if (mins <= NEAR_HORIZON_MIN) margin = MARGIN_NEAR_MIN;
     else if (mins <= MID_HORIZON_MIN) margin = MARGIN_MID_MIN;
     if (margin == null) return { text: clockText, sub: sub };
 
