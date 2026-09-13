@@ -129,6 +129,35 @@
         SB.dom.toast(now ? 'Додадено во омилени' : 'Отстрането од омилени');
       }
     }, [SB.dom.icon('heart', 'heart-icon')]));
+
+    // Real push notifications, not just an in-app countdown - see js/push.js
+    // for why that distinction matters (a countdown only works while the
+    // screen is on and the app is open; this fires even with the phone
+    // locked). Hidden outright rather than shown-disabled when the browser
+    // cannot do Web Push at all, since a button that can never work is worse
+    // than no button.
+    if (SB.push && SB.push.supported()) {
+      const isNotifying = SB.push.currentStopId() === stop.id;
+      const bellBtn = el('button', {
+        class: 'icon-btn bell-btn', type: 'button',
+        'aria-label': isNotifying ? 'Исклучи известувања' : 'Извести ме кога доаѓа',
+        'aria-pressed': String(isNotifying),
+        onclick: function () {
+          bellBtn.disabled = true;
+          const action = isNotifying ? SB.push.unsubscribe() : SB.push.subscribeToStop(stop.id);
+          action
+            .then(function () {
+              renderHead();
+              SB.dom.toast(isNotifying ? 'Известувањата се исклучени' : 'Ќе бидете известени кога автобус доаѓа');
+            })
+            .catch(function (err) {
+              bellBtn.disabled = false;
+              SB.dom.toast(err.message || 'Известувањата не успеаја.', true);
+            });
+        }
+      }, [SB.dom.icon('bell', 'bell-icon')]);
+      host.appendChild(bellBtn);
+    }
   }
 
   /* The only place favourited stops are selectable from without going through

@@ -1,0 +1,25 @@
+name: Check bus arrivals and notify
+
+# Vercel's own Hobby-tier cron only runs once a day - useless for "the bus
+# is 3 minutes away." GitHub Actions' scheduler is free on a public repo
+# (this one is) and supports 5-minute intervals, so it drives api/check.js
+# instead. See api/check.js's header comment for the full account.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/check
+        run: |
+          status=$(curl -s -o /tmp/resp.json -w '%{http_code}' \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            https://skopje-bus.vercel.app/api/check)
+          cat /tmp/resp.json
+          if [ "$status" -ge 300 ]; then
+            echo "api/check returned HTTP $status"
+            exit 1
+          fi

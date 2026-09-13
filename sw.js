@@ -6,7 +6,7 @@
  *
  * ASSETS must mirror the script list in index.html. Bump CACHE_VERSION whenever
  * any cached file changes, or an installed PWA keeps serving the old one. */
-const CACHE_VERSION = 'sb-v13';
+const CACHE_VERSION = 'sb-v14';
 const ASSETS = [
   './',
   'index.html',
@@ -20,6 +20,7 @@ const ASSETS = [
   'js/eta.js',
   'js/debug.js',
   'js/timetable.js',
+  'js/push.js',
   'js/ui-stop.js',
   'js/ui-detail.js',
   'js/ui-pick.js',
@@ -99,6 +100,39 @@ self.addEventListener('fetch', function (event) {
         event.waitUntil(network);
         return cached || network;
       });
+    })
+  );
+});
+
+/* ---------- push notifications ---------- */
+
+/* The payload comes straight from api/check.js's webpush.sendNotification()
+ * call - see js/push.js's header comment for why that has to be a server,
+ * not this file, deciding WHEN to notify. This handler only ever displays
+ * what it is sent. `tag` + `renotify` replace any still-showing notification
+ * rather than stacking a second one: a device only ever watches one stop
+ * (see js/push.js), so there is only ever one relevant alert at a time. */
+self.addEventListener('push', function (event) {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (err) { /* malformed payload - show the fallback below */ }
+  const title = data.title || 'Автобус Скопје';
+  event.waitUntil(self.registration.showNotification(title, {
+    body: data.body || '',
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    tag: 'sb-arrival',
+    renotify: true
+  }));
+});
+
+self.addEventListener('notificationclick', function (event) {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+      for (let i = 0; i < list.length; i++) {
+        if ('focus' in list[i]) return list[i].focus();
+      }
+      return self.clients.openWindow('./');
     })
   );
 });

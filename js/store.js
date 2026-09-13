@@ -8,6 +8,10 @@
     pinnedStopId: null,     // the stop shown on boot, before geolocation answers
     favouriteStops: [],     // stop ids, ordered
     savedLines: [],         // route ids the user actually rides
+    // The stop this device currently has an active PUSH subscription for, if
+    // any. A device can only hold one browser PushSubscription at a time, so
+    // this is single-valued by design, not a list - see js/push.js.
+    notifyStopId: null,
     settings: {
       useGeolocation: true,
       debug: false
@@ -25,6 +29,7 @@
         pinnedStopId: parsed.pinnedStopId != null ? parsed.pinnedStopId : null,
         favouriteStops: Array.isArray(parsed.favouriteStops) ? parsed.favouriteStops : [],
         savedLines: Array.isArray(parsed.savedLines) ? parsed.savedLines : [],
+        notifyStopId: parsed.notifyStopId != null ? parsed.notifyStopId : null,
         settings: Object.assign({}, defaults.settings, parsed.settings || {})
       };
     } catch (err) {
@@ -56,6 +61,9 @@
       persist();
       return SB.store.isFavourite(id);
     },
+
+    notifyStopId: function () { return state.notifyStopId; },
+    setNotifyStopId: function (id) { state.notifyStopId = id; persist(); },
 
     savedLines: function () { return state.savedLines.slice(); },
     isSavedLine: function (routeId) { return state.savedLines.indexOf(routeId) !== -1; },

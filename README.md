@@ -29,12 +29,20 @@ so it re-fetches everything, but that row is the one you tapped, and it lands
 immediately instead of waiting out the rest of the poll interval.
 
 **Buses that haven't left yet, shown honestly.** Any bus due at your stop
-within 40 minutes shows up automatically, marked "предвидување" — pulled from
-JSP's real per-stop schedule (fetched fresh for whichever stop you're looking
-at) and corrected against live GPS wherever a bus on that schedule is already
-being tracked. Where that correction exists, the range shown is tight; further
-out, it stays wide on purpose rather than pretending to a precision nobody
-measured. It never mixes in already-departed buses just to look fuller.
+within 40 minutes shows up automatically, pulled from JSP's real per-stop
+schedule (fetched fresh for whichever stop you're looking at). A trip that
+hasn't been dispatched yet shows its scheduled time plainly ("во 11:00 · се
+очекува") rather than a guessed countdown. Once it's actually out on the road
+and GPS-tracked, it switches to a single accurate minute count plus whether
+it's running on time, late, or early — never a wide range, and always rounded
+toward the earlier side, so checking a little early beats missing it. It never
+mixes in already-departed buses just to look fuller.
+
+**It can notify you, even with your phone locked.** Tap the bell next to a
+stop's name and it'll send a real push notification when a GPS-tracked bus is
+about to arrive there — this works even if the app isn't open, which an
+in-page countdown never could. One stop watched per device at a time; picking
+a new one replaces the old.
 
 **Tap a bus to watch just that one.** No standing map of every bus in the
 city — tap any row and it opens full screen: minutes to arrival, how many

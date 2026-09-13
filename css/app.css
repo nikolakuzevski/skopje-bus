@@ -169,9 +169,11 @@ body {
   flex-wrap: wrap;
 }
 
-/* The favourite heart sits right after the stop name/meta, not in a row of
-   its own - there is only one action here now. */
-.stop-head .heart-btn { margin-top: 12px; }
+/* The favourite heart and the notify bell sit right after the stop
+   name/meta, side by side. */
+.stop-head .heart-btn,
+.stop-head .bell-btn { margin-top: 12px; }
+.stop-head .heart-btn { margin-right: 8px; }
 
 /* ---------- buttons: rectangular, never pill-shaped ---------- */
 
@@ -218,6 +220,11 @@ body {
 .heart-btn .icon svg { fill-opacity: 0; }
 .heart-btn.is-favourite .icon svg,
 .heart-btn[aria-pressed="true"] .icon svg { fill-opacity: 1; }
+
+/* The bell stays outlined either way (its own two-part icon already draws a
+   solid clapper against an outlined body) - only the button colour changes,
+   the same accent-on-active convention as the heart. */
+.bell-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 
 /* ---------- arrivals ---------- */
 

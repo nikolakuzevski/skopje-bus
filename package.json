@@ -1,0 +1,9 @@
+{
+  "name": "skopje-bus",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Serverless functions only - the app itself is a plain static site with no build step. See CLAUDE.md.",
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
+}

@@ -54,7 +54,11 @@
       '<line x1="3" y1="10" x2="17" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
       '<line x1="3" y1="15" x2="17" y2="15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
       '<circle cx="8" cy="5" r="2.2" fill="currentColor"/><circle cx="13" cy="10" r="2.2" fill="currentColor"/>' +
-      '<circle cx="9" cy="15" r="2.2" fill="currentColor"/></svg>'
+      '<circle cx="9" cy="15" r="2.2" fill="currentColor"/></svg>',
+    bell: '<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">' +
+      '<path fill="currentColor" fill-opacity="0" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" ' +
+      'd="M10 2.8c-2.3 0-4 1.9-4 4.4v2.3c0 1-.4 2-1.1 2.7l-.6.6h11.4l-.6-.6a3.8 3.8 0 0 1-1.1-2.7V7.2c0-2.5-1.7-4.4-4-4.4Z"/>' +
+      '<path fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" d="M8.3 15.2a1.9 1.9 0 0 0 3.4 0"/></svg>'
   };
   function icon(name, extraClass) {
     return el('span', { class: 'icon' + (extraClass ? ' ' + extraClass : ''), html: ICONS[name] || '' });

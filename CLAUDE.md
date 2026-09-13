@@ -79,6 +79,7 @@ js/history.js    learned stop-to-stop travel times
 js/eta.js        the prediction engine for buses with live GPS
 js/timetable.js  per-stop scheduled departures (see transport/planner/stops/{id}/times)
 js/debug.js      predicted-vs-actual accuracy measurement
+js/push.js       "notify me" - subscribes this device to real Web Push for one stop
 js/ui-stop.js    the main screen: one stop, every bus coming to it
 js/ui-detail.js  full-screen view of ONE tapped bus, with its own small map
 js/ui-pick.js    stop search
@@ -86,7 +87,15 @@ js/ui-info.js    settings + accuracy figures, opened from the header gear icon
 js/app.js        boot, poll loop, tabs, the one-second clock
 vendor/leaflet/  Leaflet 1.9.4 (MIT), vendored deliberately - see the bus detail
                  view below
+api/subscribe.js Vercel serverless function - saves/removes a push subscription
+api/check.js     Vercel serverless function - the actual notifier, cron-triggered
+api/_lib/        shared helpers for the two functions above (not routes themselves)
 ```
+
+The `api/` folder is this app's only server-side code, and it exists for exactly
+one reason: push notifications need something checking bus positions even when
+nobody has the app open, which a static page cannot do by itself. See "Push
+notifications" below before touching anything under `api/`.
 
 ### Why the app feels fast
 
@@ -382,6 +391,81 @@ polls would open the detail view (or, before that concept existed, would have
 used) data up to several poll cycles stale. `paintRow` now refreshes
 `rows.get(key).data` on every call, so a tap always reads what is currently on
 screen.
+
+## Push notifications (`js/push.js`, `sw.js`, `api/`)
+
+The first, and so far only, reason this app has any server-side code at all.
+Everything else in this project is a static page calling JSP's API directly
+from the browser - deliberate, see "The data source" above. Notifications
+broke that: a countdown computed in `eta.js`/`timetable.js` only exists while
+the tab is open and the screen is on, because mobile browsers suspend a
+backgrounded tab's JS almost immediately (this app's own poll loop already
+relies on that being true - `document.hidden` stops polling on purpose, to
+save battery). Locking the phone or leaving the app stops everything. A
+notification that has to fire *without* the app open needs something running
+independently of the app - a server, checking on its own schedule.
+
+**Single-stop by design.** A browser holds at most one `PushSubscription` per
+origin at a time, so this does not pretend to watch several stops per device -
+subscribing to a new stop silently replaces whichever one was being watched
+before, both in the browser and on the server. A bell icon in the stop header
+(`js/push.js`, next to the favourite heart) toggles it for whichever stop is
+currently on screen.
+
+**Notifies only from `realtime: true` schedule entries** - a GPS-tracked,
+already-dispatched trip, from the same `transport/planner/stops/{id}/times`
+endpoint `js/timetable.js` already uses. Deliberately not a not-yet-dispatched
+trip's schedule-only estimate: this project spent real effort establishing
+that a not-yet-dispatched prediction should be stated as a plain scheduled
+clock time, not a countdown, because nothing live backs it yet (see the
+per-stop timetable section above) - sending a phone notification off that same
+untrustworthy number would undo that work. `NOTIFY_THRESHOLD_MIN` in
+`api/check.js` (3 minutes) matches the "already started" case the accuracy
+work above was about.
+
+**Where each piece lives:**
+
+- `js/push.js` — asks for notification permission, creates the browser's
+  `PushSubscription` (keyed to a VAPID public key baked into this file - public
+  by design, the counterpart to a private key that never leaves the server),
+  and POSTs/DELETEs it to `api/subscribe.js`. Nothing in this file decides
+  *when* to notify; it only ever sets up or tears down the subscription.
+- `sw.js`'s `push` and `notificationclick` listeners — display whatever
+  `api/check.js` sends and focus/open the app on tap. `tag: 'sb-arrival'` +
+  `renotify: true` replace any still-showing notification instead of stacking
+  one, since only one stop is ever being watched per device.
+- `api/subscribe.js` — a Vercel serverless function. Saves or removes one
+  subscription (keyed on `endpoint`, which is unique per browser+device) in
+  the store below.
+- `api/check.js` — a Vercel serverless function, and the only piece that
+  actually decides to notify. For every subscribed stop, fetches its
+  `realtime: true` entries, and for any due within `NOTIFY_THRESHOLD_MIN` that
+  this (subscription, tripId) pair has not already been notified about, sends
+  a push via the `web-push` npm package (hand-rolling Web Push's
+  ECDH+HKDF+AES128GCM payload encryption would be real cryptography code this
+  project has no business writing itself). **Not triggered by Vercel's own
+  cron** - Hobby-tier Vercel cron only runs once a day, useless for a 3-minute
+  threshold. `.github/workflows/notify-check.yml` calls it instead, every 5
+  minutes (GitHub Actions' own minimum interval), free because this repo is
+  public. Guarded by a `CRON_SECRET` header so the endpoint cannot be
+  triggered, probed, or used to burn through push-send quota by anyone who
+  finds the URL - both the deployment and its source are public.
+- **The subscription store is a single private GitHub Gist**, read and
+  rewritten whole on every call (`api/_lib/gist.js`). This is a personal app
+  with a handful of subscribed devices, not a product with many users - a real
+  database would be more infrastructure than the data justifies, and reusing
+  the GitHub auth this environment already had avoided asking for yet another
+  account. Would need revisiting (a real DB, or at least per-key writes
+  instead of whole-file rewrites) well before this could serve more than a
+  personal handful of devices - noted here so nobody mistakes it for a
+  considered choice at any larger scale.
+
+**Secrets, none of them in this public repo:** `VAPID_PUBLIC_KEY` is baked
+into `js/push.js` directly (it is meant to be public). Everything else -
+`VAPID_PRIVATE_KEY`, `GIST_ID`, `GIST_TOKEN`, `CRON_SECRET` - lives only in
+Vercel's project environment variables and the GitHub Actions repo secret,
+never committed. If any of these need rotating, that happens in the Vercel
+dashboard / `gh secret set`, not in code.
 
 ## Second audit pass (2026-09-09)
 
