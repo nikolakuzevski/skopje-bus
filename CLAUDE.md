@@ -15,7 +15,7 @@ UI language is Macedonian, because every stop name and headsign the API returns
 is already Macedonian Cyrillic.
 
 This is its own git repository, separate from the sibling projects in the parent
-folder (see `../CLAUDE.md`) — they share no code. It follows the same shape as
+folder (see `../../CLAUDE.md`) — they share no code. It follows the same shape as
 `../daily-planner/`: IIFE modules extending one global (`SB`), script order in
 `index.html` as the dependency graph, and an `sw.js` whose `ASSETS` list must
 mirror that script list.
@@ -111,6 +111,27 @@ stop the user pinned.
 when the *set* of approaching buses changes, and repaints only the time text
 once a second. Countdowns therefore tick smoothly instead of lurching once per
 poll, and nothing on screen moves unless something really changed.
+
+**A third rate while one bus is open (2026-09-15).** Measured live: every bus
+reports a GPS fix exactly every 15s, and the feed publishes it ~10s later, so a
+fix's age always cycles ~10s → ~25s → back. That cycle is upstream, not a bug;
+refreshing mid-cycle correctly returns the same fix one second older (the user
+report that prompted this: "22 sec ago", refresh, "23 sec ago"). What *was*
+ours: a 15s poll could sit on a position for up to 15s after a newer one was
+out. `ui-detail.js` now calls `SB.app.setFastPoll(true)` on open and `false`
+on close, and `app.js` polls every `FAST_POLL_MS` (3s) meanwhile. **Only every
+~15s is a poll "full"** (history, debug, `onData`); the in-between ones call
+`SB.uiDetail.liveUpdate()`, which moves only the open bus's position, speed
+and fix age. Feeding `history.js`/`debug.js`/`eta.js`'s EMA five times as
+often would weaken the countdown smoothing and fill the accuracy log with
+near-duplicates. Any failure drops straight back to the normal backoff. The
+detail view also ticks its age every second (`SB.uiDetail.tick`), says the bus
+reports every 15s, and re-fits the map only when a marker moved, so a user's
+own zoom is not reset every 3s.
+
+**Reload keeps the stop (2026-09-15).** `store.js`'s `lastStopId` is written on
+every `setStop` and read first by `chooseInitialStop()`, ahead of pinned and
+the first favourite. Before this, a reload jumped to the first favourite.
 
 The poll loop stops entirely while `document.hidden`, and backs off
 exponentially to a two-minute ceiling on repeated failure. **Note when testing:

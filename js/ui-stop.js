@@ -353,6 +353,7 @@
     setStop: function (id) {
       if (stopId === id) return;
       stopId = id;
+      if (id != null) SB.store.setLastStop(id);
       arrivals = [];
       signature = '';
       rows.clear();

@@ -41,6 +41,8 @@
   let open = false;
   let currentTripId = null;
   let lastRow = null;              // most recent matching arrival, or null if lost
+  let lastFixAt = null;            // epoch ms of lastRow's GPS fix, so its age can tick
+  let fitKey = null;               // re-fit the map only when a marker actually moved
 
   let map = null;
   let loading = null;
@@ -231,8 +233,11 @@
       const lbl = SB.eta.label(a, now);
       els.time.textContent = lbl.text;
       els.timeSub.textContent = lbl.sub;
+      // The cadence note is there because the age climbing from ~10s to ~25s
+      // and back is normal, not a stuck app: see FAST_POLL_MS in js/app.js.
       els.age.textContent = a.ageSec != null
-        ? 'Последен сигнал пред ' + SB.dom.fmtAge(a.ageSec)
+        ? 'Последен сигнал пред ' + SB.dom.fmtAge(a.ageSec) +
+          '. Автобусот ја праќа локацијата на секои 15 секунди.'
         : 'Непозната старост на сигналот';
     }
   }
@@ -323,7 +328,14 @@
       map.removeLayer(busMarker);
       busMarker = null;
     }
-    fitToMarkers();
+    // With polls every 3s, re-fitting on every paint would keep yanking back
+    // a user's own zoom or pan even while the bus has not moved.
+    const k = [stopId, lastRow.lat, lastRow.lon].join(',');
+    if (k !== fitKey) { fitKey = k; fitToMarkers(); }
+  }
+
+  function rememberFix(a, now) {
+    lastFixAt = a && !a.scheduled && a.ageSec != null ? now - a.ageSec * 1000 : null;
   }
 
   function open_(a) {
@@ -334,7 +346,10 @@
     open = true;
     currentTripId = a.tripId;
     lastRow = a;
+    fitKey = null;
+    rememberFix(a, Date.now());
     els.overlay.hidden = false;
+    SB.app.setFastPoll(true);
 
     paintText(a, Date.now());
     ensureMap().then(function () { paint(Date.now()); })
@@ -349,19 +364,52 @@
   function close() {
     open = false;
     if (els) els.overlay.hidden = true;
+    SB.app.setFastPoll(false);
   }
 
   /** Called by ui-stop.js after every recompute of `arrivals`. Cheap no-op if closed. */
   function update(arrivals, now) {
     if (!open) return;
+    const t = now || Date.now();
     lastRow = (arrivals || []).find(function (a) { return a.tripId === currentTripId; }) || null;
-    paint(now || Date.now());
+    rememberFix(lastRow, t);
+    paint(t);
+  }
+
+  /* Called by app.js for the fast polls in between the full ones. Takes the
+   * raw feed and moves only the position, heading, speed and fix age of the
+   * open bus. The arrival estimate stays whatever the last full poll computed,
+   * so eta.js's smoothing is not run five times as often. */
+  function liveUpdate(vehicles, now) {
+    if (!open || !lastRow || lastRow.scheduled) return;
+    const v = (vehicles || []).find(function (x) {
+      return x.vehicleId === lastRow.vehicleId && x.tripId === lastRow.tripId;
+    });
+    if (!v) return;   // the next full poll decides whether it is really gone
+    lastRow = Object.assign({}, lastRow, {
+      lat: v.lat, lon: v.lon, heading: v.heading, speed: v.speed,
+      stopStatus: v.stopStatus,
+      ageSec: v.lastUpdated ? (now - v.lastUpdated) / 1000 : null
+    });
+    rememberFix(lastRow, now);
+    paint(now);
+  }
+
+  /** Once a second: keeps the countdown and the signal age moving between polls. */
+  function tick(now) {
+    if (!open || !lastRow || !els) return;
+    const row = lastFixAt != null
+      ? Object.assign({}, lastRow, { ageSec: (now - lastFixAt) / 1000 })
+      : lastRow;
+    paintText(row, now);
   }
 
   SB.uiDetail = {
     open: open_,
     close: close,
     update: update,
+    liveUpdate: liveUpdate,
+    tick: tick,
     isOpen: function () { return open; }
   };
 })();

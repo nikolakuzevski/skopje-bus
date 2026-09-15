@@ -7,6 +7,11 @@
   const SB = (window.SB = window.SB || {});
 
   const POLL_MS = 15000;
+  // While one bus is open full screen. Measured 2026-09-15: each bus reports
+  // every 15s and the feed publishes that fix ~10s later, so a 15s poll could
+  // sit on a position for up to 15s after a newer one was already out. At 3s a
+  // new position is on screen within ~3s of being published.
+  const FAST_POLL_MS = 3000;
   const MAX_BACKOFF = 8;          // 15s * 8 = two minutes between retries
   const GEO_TIMEOUT_MS = 8000;
   const NEAREST_MAX_M = 1200;
@@ -19,6 +24,8 @@
 
   let vehicles = [];
   let lastPollAt = 0;
+  let lastFullAt = 0;    // last poll that fed history/debug/eta, not just the open bus
+  let fastPoll = false;  // true while the bus detail view is open
   let lastPosition = null;
   let failures = 0;
   let pollTimer = null;
@@ -71,14 +78,21 @@
 
   /* ---------------- the poll loop ---------------- */
 
+  /* Fast polling never survives a failure: an outage falls straight back to
+   * the normal exponential backoff, so an open bus view cannot hammer a feed
+   * that is already struggling. */
+  function nextDelay() {
+    if (fastPoll && failures === 0) return FAST_POLL_MS;
+    return POLL_MS * Math.min(Math.pow(2, failures), MAX_BACKOFF);
+  }
+
   function scheduleNext() {
     clearTimeout(pollTimer);
     if (document.hidden) return;   // never poll a screen nobody is looking at
-    const factor = Math.min(Math.pow(2, failures), MAX_BACKOFF);
-    pollTimer = setTimeout(poll, POLL_MS * factor);
+    pollTimer = setTimeout(function () { poll(fastPoll); }, nextDelay());
   }
 
-  function poll() {
+  function poll(fromFastTimer) {
     clearTimeout(pollTimer);
     if (document.hidden) return;
     // Without this, the timer, a visibility resume, and setStop's pollNow()
@@ -96,12 +110,21 @@
       failures = 0;
       setBanner('');
 
-      SB.history.observe(vehicles, now);
-      SB.debug.resolve(vehicles, now);
-      // uiStop.onData also refreshes the bus detail overlay, if one is open,
-      // from the same recomputed arrivals - one call site, not a second
-      // vehicles-consuming module to keep synchronised.
-      SB.uiStop.onData(vehicles, now);
+      if (fromFastTimer === true && now - lastFullAt < POLL_MS) {
+        // An in-between fast poll only moves the open bus. history.js,
+        // debug.js and eta.js's smoothing are all tuned for one observation
+        // per ~15s: five times as many would fill the accuracy log with
+        // near-duplicates and weaken the countdown smoothing.
+        if (SB.uiDetail) SB.uiDetail.liveUpdate(vehicles, now);
+      } else {
+        lastFullAt = now;
+        SB.history.observe(vehicles, now);
+        SB.debug.resolve(vehicles, now);
+        // uiStop.onData also refreshes the bus detail overlay, if one is open,
+        // from the same recomputed arrivals - one call site, not a second
+        // vehicles-consuming module to keep synchronised.
+        SB.uiStop.onData(vehicles, now);
+      }
       paintStatus(now);
       scheduleNext();
       // Lets a manual per-row refresh know its data has landed, whichever
@@ -138,12 +161,19 @@
 
   /** Poll now only if the backoff window since the last attempt has passed. */
   function pollRespectingBackoff() {
-    const factor = Math.min(Math.pow(2, failures), MAX_BACKOFF);
-    if (!lastPollAt || Date.now() - lastPollAt > POLL_MS * factor) {
+    if (!lastPollAt || Date.now() - lastPollAt > nextDelay()) {
       poll();
     } else {
       scheduleNext();
     }
+  }
+
+  /** Turned on by the bus detail view while it is open, off when it closes. */
+  function setFastPoll(on) {
+    if (fastPoll === on) return;
+    fastPoll = on;
+    // Opening a bus fetches right away instead of waiting out the current timer.
+    if (on) poll(); else scheduleNext();
   }
 
   /* ---------------- geolocation ---------------- */
@@ -209,6 +239,10 @@
   /* ---------------- boot ---------------- */
 
   function chooseInitialStop() {
+    // The stop the user was last looking at wins over the first favourite, so
+    // a page reload stays where they were.
+    const last = SB.store.lastStopId();
+    if (last != null && SB.net.stopById.has(last)) return last;
     const pinned = SB.store.pinnedStopId();
     if (pinned != null && SB.net.stopById.has(pinned)) return pinned;
     const favs = SB.store.favourites().filter(function (id) { return SB.net.stopById.has(id); });
@@ -220,6 +254,7 @@
     const now = Date.now();
     paintStatus(now);
     if (activeTab === 'stop') SB.uiStop.tick(now);
+    if (SB.uiDetail) SB.uiDetail.tick(now);
   }
 
   function boot() {
@@ -302,6 +337,7 @@
     locate: locate,
     pollNow: poll,
     requestManualRefresh: requestManualRefresh,
+    setFastPoll: setFastPoll,
     lastPosition: function () { return lastPosition; },
     lastVehicles: function () { return vehicles; },
     /** Time since the last SUCCESSFUL poll, or null before the first one. */

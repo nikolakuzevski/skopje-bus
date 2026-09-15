@@ -6,6 +6,10 @@
 
   const defaults = {
     pinnedStopId: null,     // the stop shown on boot, before geolocation answers
+    // Whichever stop was on screen last. A reload reopens THIS one, not the
+    // first favourite: reloading used to throw the user off the stop they
+    // were actually looking at.
+    lastStopId: null,
     favouriteStops: [],     // stop ids, ordered
     savedLines: [],         // route ids the user actually rides
     // The stop this device currently has an active PUSH subscription for, if
@@ -27,6 +31,7 @@
       const parsed = JSON.parse(raw);
       return {
         pinnedStopId: parsed.pinnedStopId != null ? parsed.pinnedStopId : null,
+        lastStopId: parsed.lastStopId != null ? parsed.lastStopId : null,
         favouriteStops: Array.isArray(parsed.favouriteStops) ? parsed.favouriteStops : [],
         savedLines: Array.isArray(parsed.savedLines) ? parsed.savedLines : [],
         notifyStopId: parsed.notifyStopId != null ? parsed.notifyStopId : null,
@@ -47,6 +52,13 @@
 
     pinnedStopId: function () { return state.pinnedStopId; },
     setPinnedStop: function (id) { state.pinnedStopId = id; persist(); },
+
+    lastStopId: function () { return state.lastStopId; },
+    setLastStop: function (id) {
+      if (state.lastStopId === id) return;
+      state.lastStopId = id;
+      persist();
+    },
 
     favourites: function () { return state.favouriteStops.slice(); },
     isFavourite: function (id) { return state.favouriteStops.indexOf(id) !== -1; },
